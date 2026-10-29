@@ -231,9 +231,10 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     const taskLog = message => { taskState.logs.push({ at: new Date(now()).toISOString(), message }); taskState.logs = taskState.logs.slice(-60); return saveTask() }
     persist().catch(() => {})
     const job = serial.then(async () => {
-      if (stopped || task.status === 'cancelled' || localGeneration !== generation) { task.status = 'cancelled';if(kind==='manual'){try{const id=JSON.parse(input).id;manualJobs.delete(id);engine.cancel(id)}catch{}} await saveTask(); return }
-      busy = true; task.status = 'running'; const taskDeadline=Date.now()+30*60*1000; await saveTask()
+      if (stopped || task.status === 'cancelled' || localGeneration !== generation) { task.status = 'cancelled';if(kind==='manual'){try{const id=JSON.parse(input).id;manualJobs.delete(id);engine.cancel(id)}catch{};forgetWatchRequest(task.id)} await saveTask(); return }
+      busy = true; task.status = 'running'; const taskDeadline=Date.now()+30*60*1000
       try {
+        await saveTask()
         let material;try{material=JSON.parse(input)}catch{}
         let eventInput=input,seedImages=[]
         if(kind==='manual'){
@@ -305,10 +306,10 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
       } catch (error) {
         task.status = task.status==='cancelled'||stopped || localGeneration !== generation ? 'cancelled' : 'failed'
         task.error = task.source==='watch'?'本次观看未完成，请稍后重试；如仍失败，可在 B 站生活面板检查连接。':cleanError(error)
-        await taskLog(`${kind} 任务未完成，保留交付记录，不自动重放。`)
+        await taskLog(`${kind} 任务未完成，保留交付记录，不自动重放。`).catch(()=>{})
         if(task.source==='watch'&&task.status==='failed')try{await checkGeneration(localGeneration);await pet.pet?.bubble?.('这次视频没能看完。可以在聊天问我任务进度，或稍后重试。')}catch{}
       }
-      finally { if(kind==='manual'){try{const id=JSON.parse(input).id;manualJobs.delete(id);if(task.status!=='completed')engine.cancel(id)}catch{};for(const [key,entry]of watchRequests)if(entry.taskId===task.id)watchRequests.delete(key)} if(activePolicy)for(const [id]of activePolicy.jobs)engine.cancel(id);activePolicy=null; busy = false; await saveTask() }
+      finally { if(kind==='manual'){try{const id=JSON.parse(input).id;manualJobs.delete(id);if(task.status!=='completed')engine.cancel(id)}catch{};forgetWatchRequest(task.id)} if(activePolicy)for(const [id]of activePolicy.jobs)engine.cancel(id);activePolicy=null; busy = false; await saveTask() }
     })
     serial = job.catch(() => {})
     return clone(task)
@@ -414,6 +415,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
   const wrap = handler => async (input = {}, meta) => { authorize(meta); await checkScope(); return handler(input) }
   let activePolicy = null
   const panelJobs = new Map(), panelCommands = new Map(), manualJobs = new Map(), watchRequests = new Map()
+  function forgetWatchRequest(taskId) { for(const [key,entry]of watchRequests)if(entry.taskId===taskId)watchRequests.delete(key) }
   function toolPolicy(context={}) {
     if(context.source==='plugin-task'){if(!activePolicy||!currentAI||context.aiTaskId!==currentAI)throw Error('后台工具任务已失效。');return activePolicy}
     return null

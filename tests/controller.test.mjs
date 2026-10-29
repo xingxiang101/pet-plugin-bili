@@ -328,6 +328,21 @@ test('failed chat watch reports real failure locally without another model reque
  assert.equal(result.status,'failed');assert.match(result.error,/未完成/);assert.equal(result.text,undefined);assert.match(bubbles[0],/没能看完/)
  assert.equal(f.starts,0);assert.deepEqual(f.deliveries,[]);await f.controller.dispose()
 })
+test('watch state write failures release busy state, media and in-flight deduplication before retry',async()=>{
+ for(const permanent of [false,true]){
+  const f=await fixture(),bubbles=[],watch=f.tools.get('bili_watch_video').handler,save=f.pet.storage.set;let fail=true,count=0
+  f.pet.pet={bubble:async text=>bubbles.push(text)}
+  f.pet.storage.set=async(key,value)=>{if(fail&&value.tasks.some(task=>task.status==='running')){if(!permanent)fail=false;throw Error('forced-storage-failure')}if(permanent&&fail)throw Error('forced-storage-failure');return save(key,value)}
+  f.engine.start=async args=>{const id='storage-'+(++count);f.calls.push(args);f.jobs.set(id,count===1?{id,status:'running'}:{id,status:'completed',result:{text:'重试的真实素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return id}
+  const accepted=JSON.parse((await watch({target:'BV1234567890'},{source:'chat'})).text)
+  await until(async()=>{const state=await f.controller.getState();return!state.busy&&state.tasks[0]?.status==='failed'})
+  assert.equal(f.starts,0);assert.deepEqual(f.deliveries,[]);assert.equal(bubbles.length,1);assert.ok(f.calls.some(args=>args[0]==='cancel'&&args[1]==='storage-1'))
+  fail=false
+  const retried=JSON.parse((await watch({target:'BV1234567890'},{source:'chat'})).text)
+  assert.notEqual(retried.taskId,accepted.taskId);assert.equal(count,2)
+  await until(()=>f.deliveries.length===1);assert.equal(f.starts,1);await f.controller.dispose()
+ }
+})
 test('cancelled or stale chat watch never emits a failure bubble into another scope',async()=>{
  const f=await fixture(),bubbles=[];f.pet.pet={bubble:async text=>bubbles.push(text)}
  f.engine.start=async()=>{f.jobs.set('scope-media',{id:'scope-media',status:'running'});return'scope-media'}
