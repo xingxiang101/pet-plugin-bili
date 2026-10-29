@@ -1,0 +1,164 @@
+name: Build and prerelease plugin
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify platform and version
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) || pkg.version !== manifest.version) {
+            throw new Error('Package and manifest versions must be matching semantic versions');
+          }
+          if (process.env.GITHUB_EVENT_NAME === 'push' && process.env.GITHUB_REF_NAME !== 'v' + manifest.version) {
+            throw new Error('Tag and manifest versions differ');
+          }
+          JS
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Download and verify pinned FFmpeg source
+        run: |
+          set -euo pipefail
+          source_archive="$RUNNER_TEMP/ffmpeg-n6.1.1.tar.gz"
+          curl --fail --location --retry 3 --output "$source_archive" \
+            https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n6.1.1
+          python3 - "$source_archive" <<'PY'
+          import hashlib, sys
+          from pathlib import Path
+          expected = '7c1ebea95d815e49c1e60c7ee816410dec73a81b8ac002b276780d2f9048e598'
+          if hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() != expected:
+              raise SystemExit('Official FFmpeg source archive SHA-256 mismatch')
+          PY
+          tar -xzf "$source_archive" -C "$RUNNER_TEMP"
+      - name: Build bundled LGPL FFmpeg
+        run: |
+          set -euo pipefail
+          sh scripts/build-ffmpeg.sh "$RUNNER_TEMP/FFmpeg-n6.1.1" \
+            "$GITHUB_WORKSPACE/bin/darwin-arm64" "$RUNNER_TEMP/ffmpeg-n6.1.1.tar.gz"
+          test "$(lipo -archs bin/darwin-arm64/ffmpeg)" = arm64
+          python3 <<'PY'
+          import subprocess
+          lines = subprocess.check_output(['otool', '-L', 'bin/darwin-arm64/ffmpeg'], text=True).splitlines()[1:]
+          for line in lines:
+              library = line.strip().split(' (', 1)[0]
+              if not library.startswith(('/usr/lib/', '/System/Library/')):
+                  raise SystemExit('Bundled FFmpeg has a non-system dynamic dependency: ' + library)
+          PY
+      - name: Run plugin tests
+        run: npm test
+      - name: Build complete install ZIP
+        run: npm run build
+      - name: Verify ZIP and write checksums and provenance
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+          manifest = json.loads(Path('manifest.json').read_text())
+          build = json.loads(Path('dist/build.json').read_text())
+          package = Path('dist') / build['file']
+          digest = hashlib.sha256(package.read_bytes()).hexdigest()
+          if (digest != build['sha256'] or package.stat().st_size != build['bytes'] or
+                  build['platforms'] != ['darwin-arm64'] or build['systemFfmpegRequired'] or not build['nodeAccess']):
+              raise SystemExit('Final package metadata mismatch')
+          with zipfile.ZipFile(package) as archive:
+              names = set(archive.namelist())
+              required = {manifest['entry']['tool'], manifest['entry']['panel']['src'],
+                          'lib/auth.js', 'lib/credential-values.js', 'node_modules/qrcode/lib/index.js',
+                          'scripts/build-ffmpeg.sh', 'LICENSE', 'NOTICE.md'}
+              prefix = 'bin/darwin-arm64/'
+              required.update(prefix + name for name in ('ffmpeg', 'LICENSE', 'SOURCE.json', 'version.txt', 'ffmpeg-source.tar.gz'))
+              if not required.issubset(names) or json.loads(archive.read('manifest.json')) != manifest:
+                  raise SystemExit('Final ZIP is missing runtime assets or has a different manifest')
+              if any(name.startswith(('artifacts/', 'dist/', 'node_modules/ffmpeg-static/')) for name in names):
+                  raise SystemExit('Development assets leaked into the install ZIP')
+              source = json.loads(archive.read(prefix + 'SOURCE.json'))
+              if (hashlib.sha256(archive.read(prefix + 'ffmpeg')).hexdigest() != source['sha256'] or
+                      hashlib.sha256(archive.read(prefix + source['sourceArchive'])).hexdigest() != source['sourceSha256']):
+                  raise SystemExit('Packaged FFmpeg provenance mismatch')
+              if not archive.getinfo(prefix + 'ffmpeg').external_attr >> 16 & 0o111:
+                  raise SystemExit('Packaged FFmpeg is not executable')
+          package.with_suffix(package.suffix + '.sha256').write_text(digest + '  ' + package.name + '\n')
+          receipt = {'schemaVersion': 1, 'repository': os.environ['GITHUB_REPOSITORY'],
+                     'sourceSha': os.environ['GITHUB_SHA'], 'workflowRunId': os.environ['GITHUB_RUN_ID'],
+                     'pluginId': manifest['id'], 'version': manifest['version'], 'file': package.name,
+                     'sha256': digest, 'bytes': package.stat().st_size, 'platforms': build['platforms'],
+                     'nodeAccess': True, 'status': 'ci-candidate', 'hostCompatibility': 'unreleased-sdk-required'}
+          Path('dist/release.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          Path('dist/RELEASE_NOTES.md').write_text(
+              'B 站生活 ' + manifest['version'] + ' — macOS arm64 testing candidate.\n\n'
+              'Built from public source by GitHub Actions, with bundled LGPL FFmpeg and source provenance.\n\n'
+              'Requires the unreleased host background AI and completed reply delivery SDK. '
+              'The manifest version floor alone does not establish compatibility. '
+              'A compatible published host build and marketplace review are still required.\n\n'
+              'Source commit: `' + os.environ['GITHUB_SHA'] + '`. '
+              'See `release.json` for the package digest and CI run identity.\n')
+          PY
+      - name: Preserve candidate artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bili-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+            dist/release.json
+            dist/RELEASE_NOTES.md
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  prerelease:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bili-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+      - name: Publish immutable testing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum --check ./*.zip.sha256)
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 dist/release.json \
+            --verify-tag --target "$GITHUB_SHA" --title "B 站生活 $GITHUB_REF_NAME (testing)" \
+            --notes-file dist/RELEASE_NOTES.md --prerelease --latest=false
