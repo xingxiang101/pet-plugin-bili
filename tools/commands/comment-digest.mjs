@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 // comment-digest.mjs —— "今天谁找过人家"：给主人的日终汇报（只读，一句都不回）
 //
 // 用途：她过完一天（或主人睡前）时跑一遍，把结果推给主人看 ——
@@ -31,7 +32,7 @@ const RAW = args.includes('--raw')
 //   以前 quota 拿人类可读文本做子串匹配 → 统计行里出现主人名也会误命中 ✗
 const JSON_OUT = args.includes('--json')
 
-const cred = JSON.parse(fs.readFileSync(path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json'), 'utf8'))
+const cred = loadCred()
 const H = makeHeaders(cred)
 const hhmm = (t) => (t ? new Date(t * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '时间未知')
 

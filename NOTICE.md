@@ -8,7 +8,7 @@
 |---|---|---|
 | **Bilibili API** | 全部功能都调 B 站公开接口 | 非官方；本项目**不包含** B 站任何代码或数据 |
 | **bilibili-API-collect** | `tools/docs/` 里的接口文档整理自该项目（社区维护的 B 站接口文档） | 遵循其原项目许可；仅作接口说明用，**不随本项目分发**时请以原仓库为准 |
-| **ffmpeg** | 抽帧 / 看画面（`tools/lib/ffmpeg.mjs` 只是**定位并调用**它） | **LGPL v2.1+**（若用 GPL 构建则为 GPL）。本项目**不打包** ffmpeg：请自行安装，或使用发布页附带的 LGPL 构建（附其 LICENSE 与源码链接：https://ffmpeg.org）|
+| **ffmpeg** | 抽帧 / 看画面（`tools/lib/ffmpeg.mjs` 只是**定位并调用**它） | **LGPL v2.1+**（若用 GPL 构建则为 GPL）。迁移候选随包提供 macOS arm64 的 LGPL 构建，关闭 GPL/nonfree；二进制、许可证、完整固定版本源码归档与摘要在 bin/darwin-arm64，构建脚本在 scripts/build-ffmpeg.sh。源码来自 https://github.com/FFmpeg/FFmpeg/tree/n6.1.1；开发依赖 ffmpeg-static 不随包分发|
 | **Node.js** | 运行环境 | MIT |
 
 ## 免责

@@ -1,9 +1,10 @@
+import './helpers/credentials-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {spawnSync} from 'node:child_process'
+import {spawnSync} from './helpers/spawn-tool.mjs'
 import {fileURLToPath} from 'node:url'
 const root=fileURLToPath(new URL('../',import.meta.url))
 for(const kind of ['text','image'])for(const mode of ['dry','success','reject'])test(`dynamic ${kind} ${mode}: no URL credentials; correct exit and ledger`,t=>{

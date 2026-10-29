@@ -1,11 +1,9 @@
+import { loadCred } from '../lib/cred.mjs'
 // 启动测试（2026-10-20 加 —— 装完插件先跑这个，一步确认能不能用）
 //
 //   node bili.mjs selftest
 //
-// 为什么需要它：很多人装完插件卡在两件事上 ——
-//   ① 插件新开的会话在「工作区 → 未分组」里，不点开那个文件夹看不见
-//   ② 那个新会话默认没有完全权限，agent 起来后什么都干不了
-// 这个命令把"该确认的事"列成一张表，缺哪项就直说缺哪项。
+// 检查账号、配置、数据目录与运行时；缺哪项就直说缺哪项。
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from '../lib/capture.mjs'
@@ -17,7 +15,6 @@ import { NODE_EXE } from '../lib/nodebin.mjs'   // 2026-10-21：别用 process.e
 const HOME = (process.env.USERPROFILE || process.env.HOME || '/')
 const DSH = dshPath()
 const CFG = path.join(DSH, 'bili-whale.config.json')
-const CRED = path.join(HOME, '.bili-ai', 'credentials.json')
 const OK = '✓'
 const NO = '✗'
 const WARN = '!'
@@ -44,7 +41,7 @@ try {
 
 // ② 凭据
 try {
-  const cred = JSON.parse(fs.readFileSync(CRED, 'utf8'))
+  const cred = loadCred()
   const has = !!cred.sessdata && !!cred.bili_jct
   line(has ? OK : NO, 'B站凭据', has ? '已保存（cookie）' : '缺 sessdata / bili_jct')
   line(cred.buvid3 ? OK : WARN, 'buvid3', cred.buvid3 ? '有' : '缺 —— 不影响评论/私信；个别接口可能被风控。想要就 F12 → Cookies 复制 buvid3 再写入')
@@ -54,7 +51,7 @@ try {
   else if (!/^[0-9a-fA-F]{32}$/.test(jct)) line(WARN, 'bili_jct（写操作）', '格式不像（长度 ' + jct.length + '，正常 32 位十六进制）—— 可能复制时截断了')
   else line(OK, 'bili_jct（写操作）', '格式正常（和 SESSDATA 是否同一账号，只能靠一次真实写入验证）')
 } catch {
-  line(NO, 'B站凭据', '没有 ' + CRED + ' —— 设置页粘贴 cookie 后保存')
+  line(NO, 'B站凭据', '加密仓没有可用登录信息，请在 B 站生活面板扫码或粘贴 cookie。')
 }
 
 // ③ 登录态
@@ -87,15 +84,10 @@ try {
 }
 
 // ⑥ 告诉她/他 下一步该做什么（这一步是很多人卡住的地方）
-console.log('\n────────── 接下来要做的两件事（很多人卡在这）──────────\n')
-console.log('  ① 【找到她的会话】')
-console.log('     插件启动时会自动开一个会话，位置在：')
-console.log('       左侧「工作区」→ 展开「未分组」文件夹 → 里面那个 bili-whale')
-console.log('     ⚠️ 不点开「未分组」是看不见它的 —— 这一步最容易漏 ✗')
-console.log('')
-console.log('  ② 【给她完全权限】')
-console.log('     打开那个会话 → 权限设置 → 选「完全访问 / danger-full-access」')
-console.log('     否则她起来后跑不了命令、发不了评论、写不了日记 ✗')
+console.log('\n────────── 接下来 ──────────\n')
+console.log('  在桌宠「B 站生活」面板扫码绑定 B 站账号，配置主人、通知与作息。')
+console.log('  点击「立即体验」观察任务与日记；长任务可在面板查看结果或取消。')
+console.log('  插件沿用当前宠物和模型，待审回复由面板审核后发送。')
 console.log('')
 // 2026-10-20：全绿时落个标记 —— 设置页和她的唤醒提示会用它在"还没测过"时提醒
 if (bad === 0) {
@@ -104,7 +96,7 @@ if (bad === 0) {
     fs.writeFileSync(path.join(HOME, '.bili-ai', 'selftest-passed.json'), JSON.stringify({ at: new Date().toISOString() }, null, 2))
   } catch {}
   console.log('══════════ 全部通过 ✓ 可以用了 ══════════')
-  console.log('  想立刻看她跑一轮：设置页 →「生物钟」→ 把窗口改成现在之后 2 分钟 → 等她自己醒\n')
+  console.log('  想立刻跑一轮：B 站生活面板 →「立即体验」。\n')
 } else {
   console.log(`══════════ ${bad} 项没通过 ✗ 按上面的提示补一下 ══════════\n`)
 }

@@ -68,6 +68,8 @@ export function config() {
   if (cache) return cache
   let user = {}
   try { user = JSON.parse(fs.readFileSync(configPath, 'utf8')) } catch { /* 没配置就用默认 */ }
+  const runtime = globalThis[Symbol.for('pet.bili.runtime')]
+  if (runtime?.notifySecrets?.url) user.notify = { ...user.notify, url: runtime.notifySecrets.url }
   cache = merge(DEFAULTS, user)
   cache.__hasUserFile = Object.keys(user).length > 0
   return cache

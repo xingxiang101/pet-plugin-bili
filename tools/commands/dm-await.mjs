@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 // Exit contract: 0 = message/ack/baseline; 1 + {hit:false} = normal empty; 2 = invalid input; 3 = failure.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -33,7 +34,7 @@ async function main(){
   }
   if(state.pending?.mid===owner&&!argv.includes('--baseline')){emit(state.pending);return 0}
   if(!state.queue?.length||argv.includes('--baseline')){
-    const cred=JSON.parse(fs.readFileSync(path.join(home,'.bili-ai/credentials.json'),'utf8'))
+    const cred=loadCred()
     const headers={'user-agent':'Mozilla/5.0',referer:'https://www.bilibili.com/',cookie:'SESSDATA='+cred.sessdata+'; bili_jct='+cred.bili_jct+'; buvid3='+cred.buvid3}
     const result=await readHistory(owner,headers,state,{baseline:argv.includes('--baseline')})
     if(argv.includes('--baseline')){

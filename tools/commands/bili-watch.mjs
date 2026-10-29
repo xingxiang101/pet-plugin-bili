@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import { watchOptions } from '../lib/watch-options.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 import { apiGet } from '../lib/bili-api.mjs'
@@ -7,7 +8,7 @@ import { apiGet } from '../lib/bili-api.mjs'
 //   例: node bili-watch.mjs BV1iLYm6VET3            → 3x3 九宫格
 //       node bili-watch.mjs BV1iLYm6VET3 4x4        → 16 格，看得更细
 //
-// 依赖：ffmpeg（查找顺序见 lib/ffmpeg.mjs：$FFMPEG → PATH → bin/ → ~/.dsh/bili-whale/bin → 本机剪映）
+// 依赖：FFmpeg（显式 FFMPEG → 经摘要验证的随包平台构建 → PATH），只在本插件缓存目录写视频与图片。
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from '../lib/capture.mjs'
@@ -25,7 +26,7 @@ const [cols, rows] = grid.split('x').map(Number)
 if (!cols || !rows) { console.error('格子格式应是 3x3 这样'); process.exit(2) }
 const N = cols * rows
 
-const cred = JSON.parse(fs.readFileSync(path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json'), 'utf8'))
+const cred = loadCred()
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const H = { 'user-agent': UA, referer: 'https://www.bilibili.com/', cookie: `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}` }
 

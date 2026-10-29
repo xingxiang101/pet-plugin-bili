@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import {checkCommentTarget} from '../lib/comment-target.mjs'
 import {exactJson} from '../lib/json-exact.mjs'
 import { decision, notifyOnce } from '../lib/ai-share.mjs'
@@ -226,12 +227,7 @@ if (SHARE && !parent && type === '1' && config().share?.via === 'comment' && con
   }
 }
 const credPath = path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json')
-if (!fs.existsSync(credPath)) {
-  console.error(`credentials file missing: ${credPath}`)
-  console.error('create it with {"sessdata":"...","bili_jct":"...","buvid3":"..."}')
-  process.exit(3)
-}
-const cred = JSON.parse(fs.readFileSync(credPath, 'utf8'))
+const cred = loadCred()
 // 2026-10-21 修：buvid3 不该是必填 ✗ —— 没有它的用户会被这里直接 exit 3，评论永远发不出去
 //   （B站 大部分写接口不需要 buvid3；缺了只影响个别接口）
 const missing = ['sessdata', 'bili_jct'].filter((k) => !cred[k] || String(cred[k]).trim() === '')

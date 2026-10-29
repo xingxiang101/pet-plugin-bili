@@ -1,3 +1,4 @@
+import './credentials-fixture.mjs'
 import fs from 'node:fs'
 globalThis.fetch = async (url, opts = {}) => {
   fs.appendFileSync(process.env.TEST_REQUESTS, JSON.stringify({url:String(url),method:opts.method ?? 'GET'})+'\n')

@@ -1,3 +1,4 @@
+import './credentials-fixture.mjs'
 import fs from 'node:fs'
 globalThis.fetch=async (input,options={})=>{
  const url=String(input)

@@ -1,9 +1,10 @@
+import './helpers/credentials-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {spawn,spawnSync} from 'node:child_process'
+import {spawn,spawnSync} from './helpers/spawn-tool.mjs'
 import {fileURLToPath,pathToFileURL} from 'node:url'
 const root=fileURLToPath(new URL('../',import.meta.url))
 const row=(seq,ts=1000,sender=222)=>({msg_seqno:seq,msg_key:String(seq),timestamp:ts,sender_uid:sender,content:JSON.stringify({content:'message '+seq})})

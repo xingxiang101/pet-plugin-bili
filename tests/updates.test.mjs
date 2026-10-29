@@ -1,3 +1,4 @@
+import './helpers/credentials-fixture.mjs'
 import test from 'node:test'
 import { wakePrompt } from '../lib/scheduler.js'
 import assert from 'node:assert/strict'

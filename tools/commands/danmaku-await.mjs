@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 // "叫我起床"式监听：只在出现**该回的弹幕**时退出，把消息交给 agent（我）去回。
 // 与 danmaku-auto.mjs 的区别：它不发弹幕，只负责"发现 → 退出 → 让 agent 接手"。
@@ -45,7 +46,7 @@ const ignoreUids = String(args.get('ignore-uid') ?? '')
 if (!roomArg) { console.error('需要 --room <房间号>'); process.exit(2) }
 
 const credDir = path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai')
-const cred = JSON.parse(fs.readFileSync(path.join(credDir, 'credentials.json'), 'utf8'))
+const cred = loadCred()
 const statePath = path.join(credDir, 'await-state.json')
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : { lastTs: 0 }
 const recentIds = new Set(state.recentIds ?? []) // 已处理过的消息 id（跨进程持久，防止重挂后重复回）
@@ -64,7 +65,7 @@ const saveState = (ts, extraId) => {
 const cookieHeader = `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}`
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const H = () => ({ 'user-agent': UA, referer: `https://live.bilibili.com/${roomArg}`, origin: 'https://live.bilibili.com', cookie: cookieHeader })
-const log = (...a) => console.log(`[${new Date().toLocaleTimeString('zh-CN')}]`, ...a)
+const log = (...a) => console.log(`[${new Date().toLocaleTimeString('zh-CN')}]`, ...a.map(value => String(value).replace(/\r/g, '\\r').replace(/\n/g, '\\n')))
 const jget = async (u) => (await fetch(u, { headers: H() })).json()
 
 // 账号昵称可能被改（实测小号改过名），
@@ -198,7 +199,8 @@ if (args.has('selftest')) {
 
 const hitAndExit = (uid, uname, dmid, text, via) => {
   saveState(Date.now(), dmid)
-  console.log(`AWAIT_HIT uid=${uid} uname=${uname} dmid=${dmid} via=${via} text=${text}`)
+  console.log('AWAIT_EVENT ' + JSON.stringify({ uid: String(uid), uname: String(uname), dmid: String(dmid), via: String(via), text: String(text) }))
+  console.log(`AWAIT_HIT uid=${uid} uname=${JSON.stringify(String(uname))} dmid=${JSON.stringify(String(dmid))} via=${JSON.stringify(String(via))} text=${JSON.stringify(String(text))}`)
   process.exit(0)
 }
 

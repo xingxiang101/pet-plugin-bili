@@ -17,9 +17,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { execFile } from 'node:child_process'
+import { execFileSync } from '../lib/capture.mjs'
 import { fileURLToPath } from 'node:url'
 import { NODE_EXE } from '../lib/nodebin.mjs'   // 2026-10-21：别用 process.execPath（Electron 里它是主程序 ✗）
+import { replyReadOptions } from '../lib/reply-read-options.mjs'
 
 const HOME = process.env.USERPROFILE || process.env.HOME || '.'
 const FILE = path.join(HOME, '.bili-ai', 'pending-replies.json')
@@ -45,6 +46,11 @@ if (cmd === 'add') {
   const { oid, bvid, root, parent, who, message, src } = opt
   if (!oid || !message) { console.error('需要 --oid 和 --message'); process.exit(2) }
   if (!root || !parent) { console.error('回复要有 --root 和 --parent（坐标从 comment-digest 拿）'); process.exit(2) }
+  const business = String(opt.business ?? opt.type ?? '1')
+  const type = String(opt.type ?? (['11', '17'].includes(business) ? business : '1'))
+  const referer = opt.referer ? String(opt.referer) : ''
+  try { replyReadOptions(['--type', type, ...(referer ? ['--referer', referer] : [])]) }
+  catch (error) { console.error(error.message); process.exit(2) }
   const text = String(message).trim()
   if (text.length > 500) { console.error('草稿太长（>500），砍短'); process.exit(2) }
   const db = load()
@@ -57,6 +63,7 @@ if (cmd === 'add') {
     id: crypto.randomBytes(4).toString('hex'),
     at: new Date().toISOString(),
     oid: String(oid), bvid: bvid ? String(bvid) : '', root: String(root), parent: String(parent),
+    business, type, referer,
     who: who ? String(who) : '', src: src ? String(src).slice(0, 300) : '',
     message: text,
   }
@@ -64,18 +71,17 @@ if (cmd === 'add') {
   save(db)
   console.log(`✓ 已进待审队列：${item.id} → ${item.who || '（对方）'} · ${text.length} 字`)
 
-  // 2026-10-18 主人定：**需要审核的回复直接推送给主人** ✓（不做设置页 UI ✗）
+  // 审批只由可信设置面板执行；通知不能承诺模型聊天可放行。
   // best-effort：推送失败不影响入队 ✓
   try {
     const summary = [
       `【等你审核 1 条回复】→ ${item.who || '对方'}`,
       item.src ? `他说：${item.src}` : '',
       `你要回：${text}`,
-      '回我「发」就发 ✓ 回「不发」就撤掉 ✓（也可以直接给我改一版）',
+      '请到「B 站生活」面板的「待审核回复」审核、发送或拒绝。',
     ].filter(Boolean).join('\n')
     const notifier = path.join(path.dirname(fileURLToPath(import.meta.url)), 'notify.mjs')
-    execFile(NODE_EXE, [notifier, summary, '--title', '待审回复'],
-      { windowsHide: true, timeout: 60000 }, () => {})
+    execFileSync(NODE_EXE, [notifier, summary, '--title', '待审回复'], { encoding: 'utf8', timeout: 60000 })
   } catch {}
   process.exit(0)
 }
@@ -88,7 +94,8 @@ if (cmd === 'list') {
   for (const x of db.items) {
     // 2026-10-18 修：原来直接切 ISO 串 = 显示的是 UTC ✗（本地 08:15 显示成 00:15 ✗）
     const t = new Date(x.at).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-    console.log(`  ${x.id}  ${t}  → ${x.who || '?'}  「${x.message.slice(0, 40)}${x.message.length > 40 ? '…' : ''}」`)
+    console.log(`  ${x.id}  ${t}  → ${x.who || '?'}  type=${x.type || '1'} business=${x.business || '1'}  「${x.message.slice(0, 40)}${x.message.length > 40 ? '…' : ''}」`)
+    if (x.referer) console.log(`    页面：${x.referer}`)
   }
   process.exit(0)
 }
@@ -104,7 +111,8 @@ if (cmd === 'show') {
   console.log(`id      : ${hit.id}`)
   console.log(`对方    : ${hit.who || '?'}`)
   console.log(`对方说  : ${hit.src || '（未记录）'}`)
-  console.log(`坐标    : oid=${hit.oid} bvid=${hit.bvid} root=${hit.root} parent=${hit.parent}`)
+  console.log(`坐标    : oid=${hit.oid} bvid=${hit.bvid} root=${hit.root} parent=${hit.parent} business=${hit.business || '1'} type=${hit.type || '1'}`)
+  if (hit.referer) console.log(`页面    : ${hit.referer}`)
   console.log(`你要回  : ${hit.message}`)
   process.exit(0)
 }

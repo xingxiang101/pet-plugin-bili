@@ -1,3 +1,4 @@
+import './helpers/credentials-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {pullFeed,resolveLatestReply} from '../tools/lib/msgfeed.mjs'

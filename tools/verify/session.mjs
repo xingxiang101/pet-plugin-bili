@@ -1,15 +1,11 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 // 先确认"这串 cookie 是哪个号"——任何写操作之前都该跑一次。
 import fs from 'node:fs'
 import path from 'node:path'
 
 const credPath = path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json')
-if (!fs.existsSync(credPath)) {
-  console.error(`缺少凭据文件: ${credPath}`)
-  console.error('内容应为 {"sessdata":"…","bili_jct":"…","buvid3":"…"}（见 README「凭据」一节）')
-  process.exit(3)
-}
-const cred = JSON.parse(fs.readFileSync(credPath, 'utf8'))
+const cred = loadCred()
 // 2026-10-21：buvid3 改为可选（缺了不该拦住任何事 ✗）
 const missing = ['sessdata', 'bili_jct'].filter((k) => !cred[k] || String(cred[k]).trim() === '')
 if (missing.length) {

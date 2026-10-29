@@ -1,4 +1,7 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
+import { exactJson } from '../lib/json-exact.mjs'
+import { replyReadOptions } from '../lib/reply-read-options.mjs'
 // 复核一条评论到底有没有"公开"出去。三层：
 //   [a] 视频页 HTML（服务端状态，匿名）
 //   [b] reply/reply 匿名请求  ← 公开世界的视角
@@ -16,21 +19,21 @@ import { guardedFetch as fetch } from '../lib/traffic.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const RPID = process.argv[2]
-const AID = process.argv[3]
-const BVID = process.argv[4]
+let options
+try { options = replyReadOptions(process.argv.slice(2)) } catch (error) { console.error(error.message); process.exit(2) }
+const [RPID, AID, BVID] = options.positionals
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-const REF = BVID ? `https://www.bilibili.com/video/${BVID}/` : 'https://www.bilibili.com/'
+const REF = options.referer || (BVID ? `https://www.bilibili.com/video/${BVID}/` : 'https://www.bilibili.com/')
 
-if (!RPID || !AID) { console.error('用法: node comment-exists.mjs <rpid> <aid> [bvid]'); process.exit(2) }
+if (!/^\d+$/.test(RPID || '') || !/^\d+$/.test(AID || '')) { console.error('用法: check-comment <rpid> <oid> [bvid] [--type 1|11|17] [--referer B站URL]'); process.exit(2) }
 
-const a = BVID ? await fetch(`https://www.bilibili.com/video/${BVID}/`, {
+const a = BVID && options.type === '1' ? await fetch(`https://www.bilibili.com/video/${BVID}/`, {
   headers: { 'user-agent': UA, referer: 'https://www.bilibili.com/', 'accept-language': 'zh-CN,zh;q=0.9' },
 }) : null
 if (a) {
   const html = await a.text()
   console.log(`[a] 视频页 HTTP ${a.status}，${html.length} 字节`)
-  for (const needle of [RPID, ...process.argv.slice(3)]) {
+  for (const needle of [RPID, AID, BVID].filter(Boolean)) {
     const n = html.split(needle).length - 1
     console.log(`    包含 "${needle}": ${n > 0 ? `是（${n} 处）` : '否'}`)
   }
@@ -38,10 +41,10 @@ if (a) {
   console.log('[a] 没给 bvid，跳过视频页检查')
 }
 
-const b = await fetch(`https://api.bilibili.com/x/v2/reply/reply?type=1&oid=${AID}&root=${RPID}&pn=1&ps=20`, {
+const b = await fetch(`https://api.bilibili.com/x/v2/reply/reply?type=${options.type}&oid=${AID}&root=${RPID}&pn=1&ps=20`, {
   headers: { 'user-agent': UA, referer: REF },
 })
-const bd = await b.json()
+const bd = await exactJson(b)
 console.log(`\n[b] reply/reply HTTP ${b.status} code=${bd.code} message=${bd.message}`)
 if (bd.code === 0) {
   const root = bd.data?.root
@@ -62,9 +65,9 @@ if (bd.code === 0) {
 let foundInMain = false
 try {
   for (let pn = 1; pn <= 3 && !foundInMain; pn += 1) {
-    const u = `https://api.bilibili.com/x/v2/reply?type=1&oid=${AID}&pn=${pn}&ps=20&sort=2`
+    const u = `https://api.bilibili.com/x/v2/reply?type=${options.type}&oid=${AID}&pn=${pn}&ps=20&sort=2`
     const r = await fetch(u, { headers: { 'user-agent': UA, referer: REF } })   // 匿名
-    const rd = await r.json()
+    const rd = await exactJson(r)
     const list = rd.data?.replies ?? []
     if (!list.length) break
     const hit = list.find((x) => String(x.rpid) === String(RPID))
@@ -90,12 +93,12 @@ if (foundInMain) {
   process.exit(0)
 }
 try {
-  const cred = JSON.parse(fs.readFileSync(path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json'), 'utf8'))
+  const cred = loadCred()
   const cookie = `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}`
-  const c = await fetch(`https://api.bilibili.com/x/v2/reply/reply?type=1&oid=${AID}&root=${RPID}&pn=1&ps=20`, {
+  const c = await fetch(`https://api.bilibili.com/x/v2/reply/reply?type=${options.type}&oid=${AID}&root=${RPID}&pn=1&ps=20`, {
     headers: { 'user-agent': UA, referer: REF, cookie },
   })
-  const cd = await c.json()
+  const cd = await exactJson(c)
   const croot = cd.data?.root
   console.log(`\n[c] 带登录态对照 HTTP ${c.status} code=${cd.code}`)
   if (croot) {

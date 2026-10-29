@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 // 选题器：照"她自己的偏好"挑今天该看什么。**只读**，不产生任何对外动作。
 //
@@ -52,7 +53,7 @@ try {
   for(const row of ledger.log??[])if(row.type==='comment'&&/^BV:BV[0-9A-Za-z]{10}$/.test(row.target??''))seen.add(row.target.slice(3))
 } catch(e) {if(e.code!=='ENOENT')throw Error('评论账本无法读取，停止选题以免重复分享')}
 
-const cred = JSON.parse(fs.readFileSync(path.join(HOME, '.bili-ai', 'credentials.json'), 'utf8'))
+const cred = loadCred()
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const H = { 'user-agent': UA, referer: 'https://search.bilibili.com/', cookie: `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}` }
 const MIXIN_TAB = [46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52]
@@ -87,7 +88,11 @@ function searchKeywordOf(p) {
   }
   return grams[grams.length - 1] ?? String(p)
 }
-const searchKeywords = [...new Set(prefs.slice(0, 6).map(searchKeywordOf))]
+const explicitKeywords = Array.isArray(config().preferences?.keywords) ? config().preferences.keywords : []
+const searchKeywords = [...new Set([
+  ...explicitKeywords.filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean),
+  ...prefs.slice(0, 6).map(searchKeywordOf),
+])].slice(0, 6)
 
 // 2026-10-23 改（主人：feed 27 秒太久 ✗）：
 //   以前 6 个词 × 2 种排序 = 12 次搜索 ✗ 加上请求保护层的 1500ms → 18 秒 ✗
@@ -283,7 +288,8 @@ for (const x of uniq) {
   diversified.push(x)
 }
 
-console.log(`偏好（来自日记）: ${prefs.join(' · ')}`)
+console.log(`偏好: ${prefs.join(' · ')}`)
+console.log(`搜索关键词: ${searchKeywords.join(' · ')}`)
 console.log(`反馈回流: 被赞 ${likedEvents.length} 条 · 她收藏 ${favItems.length} 条 → 学会 ${learnedTokens.length} 个主题词`)
 console.log(`已看过/已评论过（已排除）: ${seen.size} 个 BV`)
 console.log(`候选池: ${pool.length} 条 → 去重去已看后 ${uniq.length} 条\n`)

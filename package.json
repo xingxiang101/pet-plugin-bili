@@ -1,7 +1,7 @@
 {
-  "name": "dsh-bili-whale",
-  "version": "0.4.6",
-  "description": "养一条有日子的鱼：让 DSH 里的 agent 自己刷 B 站、看懂视频、写两本日记，把值得的 @ 你。设置里有「养鱼」完整设置页（27 项）+ 依赖体检 + cookie 写入 + 共享配置（与工具链同一份 bili-whale.config.json）。",
+  "name": "pet-plugin-bili",
+  "version": "0.1.0",
+  "description": "让当前宠物自主浏览 B 站、理解视频、记录日记，并按设置处理互动。",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -12,41 +12,43 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "test:upstream": "node --test tests/*.test.mjs",
+    "test:migration": "npm run test:engine && npm run test:controller && npm run test:build",
+    "build": "python3 scripts/build-plugin.py",
+    "test:engine": "node --test tests/engine.test.mjs",
+    "test:controller": "node --test tests/controller.test.mjs",
+    "test:electron": "node tests/electron-e2e.cjs",
+    "test:build": "node --test tests/build.test.mjs",
+    "test:delivery": "npm test && npm run build && npm run test:electron"
   },
-  "main": "lib/index.js",
+  "main": "index.cjs",
   "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js",
+    ".": "./index.cjs",
     "./package.json": "./package.json"
   },
   "files": [
+    "index.cjs",
+    "manifest.json",
+    "src",
+    "panel",
     "lib",
     "tools",
-    "cordis.patch.yml",
+    "LICENSE",
+    "NOTICE.md",
     "README.md",
-    "tests",
-    "AUDIT-FIXES.md",
-    "RISK-PROTECTION.md",
-    "AI-SHARE-TRIAL.md",
-    "LOCAL-UPDATE.md",
-    "ISSUE27-FIX.md",
-    "LISTENER-FIX.md",
-    "DM-HISTORY-FIX.md",
-    "BUGFIX-2026-10-25.md",
-    "QR-LOGIN-2026-10-25.md"
+    "bin",
+    "scripts/build-ffmpeg.sh"
   ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "inject": [],
-      "platform": "web"
-    }
-  },
   "license": "MIT",
   "dependencies": {
     "qrcode": "1.5.4"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "ffmpeg-static": "5.3.0"
   }
 }

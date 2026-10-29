@@ -1,9 +1,10 @@
+import './helpers/credentials-fixture.mjs'
 import test,{after} from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {spawnSync} from 'node:child_process'
+import {spawnSync} from './helpers/spawn-tool.mjs'
 import {fileURLToPath,pathToFileURL} from 'node:url'
 import {makeSample,recordAssessment,decision,readAI,writeAI,notifyOnce,cacheComments} from '../tools/lib/ai-share.mjs'
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'whale-ai-share-'))

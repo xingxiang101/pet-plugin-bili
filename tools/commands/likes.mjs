@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 // 「收到的赞」—— 谁赞了什么（2026-10-18 加，主人指出 B站客户端能看到点赞的人）
 //
@@ -24,7 +25,7 @@ const HOURS = Number(typeof opt.hours === 'string' ? opt.hours : 24)
 const ONLY_OWNER = process.argv.includes('--owner')
 const JSONOUT = process.argv.includes('--json')
 
-const cred = JSON.parse(fs.readFileSync(path.join(HOME, '.bili-ai', 'credentials.json'), 'utf8'))
+const cred = loadCred()
 const H = {
   'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   referer: 'https://www.bilibili.com/',

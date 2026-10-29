@@ -32,3 +32,15 @@ export function translateNamed(cmd, args) {
   return [...given.map((k) => named[k]), ...flags]
 }
 
+// Normalize before path validation so named aliases and --key=value cannot bypass it.
+export function normalizeCommandArgs([command, ...args]) {
+  const aliases = { '--text-file': '--textFile', '--out-dir': '--outDir' }
+  const expanded = args.flatMap(arg => {
+    const equal = arg.startsWith('--') ? arg.indexOf('=') : -1
+    const values = equal > 2 ? [arg.slice(0, equal), arg.slice(equal + 1)] : [arg]
+    values[0] = aliases[values[0]] || values[0]
+    return values
+  })
+  return [command, ...translateNamed(command, expanded)]
+}
+

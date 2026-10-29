@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch, trafficGuard } from '../lib/traffic.mjs'
 import { dshPath } from '../lib/paths.mjs'
 // 依赖体检（2026-10-17 加）：装完之后让 agent 自己跑一次，确认"能不能用"
@@ -22,7 +23,7 @@ const items = []
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 let credOk = false, credNote = ''
 try {
-  const c = JSON.parse(fs.readFileSync(cred, 'utf8'))
+  const c = loadCred()
   const miss = ['sessdata', 'bili_jct'].filter((k) => !c[k] || !String(c[k]).trim())
   if (miss.length) { credNote = `缺字段：${miss.join(', ')}` }
   else {
@@ -48,7 +49,7 @@ items.push({
   name: 'ffmpeg（抽帧看画面）',
   ok: ff.ok,
   detail: ff.ok ? `${ff.version}\n  路径：${ff.path}` : (ff.path ? `找到了但跑不起来：${ff.version ?? ff.error}` : '没找到'),
-  fix: '① winget install ffmpeg  ② 或设环境变量 FFMPEG=路径  ③ 或放进 <仓库>/bin/ 或 ~/.dsh/bili-whale/bin/',
+  fix: '安装适配当前系统与芯片的插件包，或设置 FFMPEG 为已安装 FFmpeg 的绝对路径。',
 })
 
 // ③ Node 版本（要 18+ 才有稳定 fetch）
@@ -78,10 +79,10 @@ try {
     name: 'node 运行时',
     ok: real,
     detail: real ? NODE_EXE : ('这个不是 node：' + NODE_EXE + '（会静默返回空输出）'),
-    fix: '设置环境变量 DSH_NODE 指向 node 可执行文件的绝对路径，然后重启 DSH',
+    fix: '重新启用插件；仍不可用时更新桌宠，插件使用宿主提供的 Node 运行时。',
   })
 } catch (e) {
-  items.push({ name: 'node 运行时', ok: false, detail: '检查失败：' + String(e?.message ?? e).slice(0, 80), fix: '设置 DSH_NODE' })
+  items.push({ name: 'node 运行时', ok: false, detail: '检查失败：' + String(e?.message ?? e).slice(0, 80), fix: '重新启用插件或更新桌宠。' })
 }
 
 items.push({ name: '数据目录可写', ok: dirOk, detail: path.join(HOME, '.bili-ai'), fix: '检查该目录权限' })
@@ -131,13 +132,13 @@ try {
       const mins = Math.round((atMs - now) / 60000)
       // Today's wake count does not establish that this particular plan ran.
       if (st.fired === true || st.woke === true) {
-        detail = `每 60 秒 tick · 今天已醒 ${woke}/${maxW} 次 · 计划 ${st.atText ?? ''} 已执行 ✓`
+        detail = `后台作息计划 · 今天已醒 ${woke}/${maxW} 次 · 计划 ${st.atText ?? ''} 已执行 ✓`
       } else if (atMs < now - 15 * 60000) {
         ok = false
         detail = `计划 ${st.atText ?? ''} 已经过去 ${Math.abs(mins)} 分钟还没执行 → 调度器可能没在跑 ✗`
-        fix = '重启 DSH；起来后看设置页「依赖体检」里调度器那行'
+        fix = '重新启用插件；在 B 站生活面板查看调度状态。'
       } else {
-        detail = `每 60 秒 tick · 下次 ${st.atText ?? new Date(atMs).toLocaleString('zh-CN')}${mins > 0 ? `（${mins} 分钟后）` : '（马上）'} · 今日已醒 ${woke}/${maxW}`
+        detail = `后台作息计划 · 下次 ${st.atText ?? new Date(atMs).toLocaleString('zh-CN')}${mins > 0 ? `（${mins} 分钟后）` : '（马上）'} · 今日已醒 ${woke}/${maxW}`
       }
     } else if (action === 'done') {
       detail = `今日已醒 ${woke}/${maxW} · 今晚不会再醒（${st.reason ?? '窗口已用完'}）`
@@ -149,14 +150,14 @@ try {
     items.push({ name: '生物钟', ok, detail, fix })
   }
 } catch (e) {
-  items.push({ name: '生物钟', ok: false, detail: '检查失败：' + String(e?.message ?? e).slice(0, 80), fix: '看设置页「养鱼」里生物钟那行；或 node bili.mjs night plan' })
+  items.push({ name: '生物钟', ok: false, detail: '检查失败：' + String(e?.message ?? e).slice(0, 80), fix: '在 B 站生活面板配置作息并查看调度状态。' })
 }
 
 try {
   const state = trafficGuard().status()
   const manual=Object.keys(state.manual??{}).length
   let currentPause
-  try { const c=JSON.parse(fs.readFileSync(cred,'utf8'));currentPause=trafficGuard().pauseReason({cookie:`SESSDATA=${c.sessdata}`}) } catch {}
+  try { const c=loadCred();currentPause=trafficGuard().pauseReason({cookie:`SESSDATA=${c.sessdata}`}) } catch {}
   const pending=Object.values(state.operations??{}).filter(x=>['pending','unknown'].includes(x.status)).length
   const paused=Number(state.until??0)>Date.now()
   items.push({name:'全局请求保护',ok:!currentPause&&!pending,detail:`${currentPause??'当前账号可请求'}；${manual} 个会话凭据曾需人工处理，${pending} 条发送结果待核查`,fix:'运行 node tools/bili.mjs traffic status 查看。人工核查前不要重发或解除暂停。'})

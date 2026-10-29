@@ -1,0 +1,70 @@
+{
+  "id": "bili",
+  "name": "B 站生活",
+  "description": "让当前宠物按作息浏览和理解 B 站视频、记录日记，并处理评论、主人私信、收藏与动态。",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "minHostVersion": "0.29.1",
+  "kind": [
+    "tool",
+    "panel",
+    "service"
+  ],
+  "permissions": [
+    "storage",
+    "secrets",
+    "scheduler",
+    "tools",
+    "ai",
+    "ui",
+    "pet",
+    "net:api.bilibili.com",
+    "net:passport.bilibili.com",
+    "net:api.vc.bilibili.com",
+    "net:api.live.bilibili.com",
+    "net:live.bilibili.com",
+    "net:www.bilibili.com",
+    "net:i0.hdslb.com",
+    "net:i1.hdslb.com",
+    "net:i2.hdslb.com",
+    "events",
+    "files"
+  ],
+  "services": [
+    "bili-control"
+  ],
+  "provides": {
+    "service": "bili-control",
+    "methods": [
+      "state",
+      "settings",
+      "saveSettings",
+      "loginStart",
+      "loginPoll",
+      "loginCancel",
+      "logout",
+      "wake",
+      "runCommand",
+      "job",
+      "cancelJob",
+      "aiTask",
+      "cancelTask",
+      "drafts",
+      "reviewDraft",
+      "diary",
+      "image",
+      "importFile",
+      "prepareText",
+      "loginManual"
+    ]
+  },
+  "entry": {
+    "tool": "index.cjs",
+    "panel": {
+      "src": "panel/index.html",
+      "width": 920,
+      "height": 740,
+      "title": "B 站生活"
+    }
+  }
+}

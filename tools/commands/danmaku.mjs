@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 // Live-room danmaku: pre-flight permission check, one send, read-back verify,
 // and a real-time listener (WebSocket, no dependencies).
@@ -28,8 +29,7 @@ const isGo = args.has('go')
 if (!roomArg) { console.error('需要 --room <房间号>'); process.exit(2) }
 
 const credPath = path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json')
-if (!fs.existsSync(credPath)) { console.error(`缺少凭据文件: ${credPath}`); process.exit(3) }
-const cred = JSON.parse(fs.readFileSync(credPath, 'utf8'))
+const cred = loadCred()
 for (const k of ['sessdata', 'bili_jct', 'buvid3']) {
   if (!cred[k] || String(cred[k]).trim() === '') { console.error(`凭据文件缺少 ${k}`); process.exit(3) }
 }

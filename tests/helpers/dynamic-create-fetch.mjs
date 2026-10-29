@@ -1,3 +1,4 @@
+import './credentials-fixture.mjs'
 import fs from 'node:fs'
 import assert from 'node:assert/strict'
 globalThis.fetch=async(input,options={})=>{

@@ -9,26 +9,14 @@
 //   ① 读凭据时统一 trim（粘贴时常带空格/换行 ✗）
 //   ② 缺字段直接说缺哪个，而不是拿 undefined 去发请求
 //   ③ 把常见错误码翻译成人话（-101 / -111 / 12015 / 10031 / 12051 / -352）
-import fs from 'node:fs'
-import path from 'node:path'
 
 import { credentialsPath } from './paths.mjs'
 export const CRED_PATH = credentialsPath
 
 /** 读凭据：统一 trim，容忍 BOM / 首尾空白。 */
 export function loadCred() {
-  let raw
-  try {
-    raw = fs.readFileSync(CRED_PATH, 'utf8')
-  } catch {
-    throw new Error(`没有凭据文件：${CRED_PATH}\n  去设置页粘贴一次 cookie 并保存 ✓`)
-  }
-  let j
-  try {
-    j = JSON.parse(raw.replace(/^\uFEFF/, ''))
-  } catch (e) {
-    throw new Error(`凭据文件不是合法 JSON：${CRED_PATH}\n  ${String(e.message).slice(0, 80)}`)
-  }
+  const j = globalThis[Symbol.for('pet.bili.runtime')]?.credentials
+  if (!j) throw new Error('尚未登录 B 站，请在插件面板扫码登录。凭据由桌宠加密仓提供。')
   const clean = (v) => String(v ?? '').replace(/^["'\s]+|["'\s]+$/g, '')
   return {
     sessdata: clean(j.sessdata),

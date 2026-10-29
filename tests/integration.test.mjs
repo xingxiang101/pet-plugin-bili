@@ -1,10 +1,11 @@
+import './helpers/credentials-fixture.mjs'
 process.env.BILI_TRAFFIC_TEST = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {spawnSync} from 'node:child_process'
+import {spawnSync} from './helpers/spawn-tool.mjs'
 import {fileURLToPath,pathToFileURL} from 'node:url'
 const root=fileURLToPath(new URL('../',import.meta.url))
 function sandbox(t,cfg={}) {

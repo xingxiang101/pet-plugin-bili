@@ -1,3 +1,4 @@
+import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 // Post ONE image dynamic. Does not delete anything — the caller decides.
 //
@@ -73,8 +74,7 @@ if (!dims) { console.error('✗ 没解析出尺寸，无法组装 pics'); proces
 
 // ---- credentials -----------------------------------------------------------
 const credPath = path.join((process.env.USERPROFILE || process.env.HOME || '/'), '.bili-ai', 'credentials.json')
-if (!fs.existsSync(credPath)) { console.error(`缺少凭据文件: ${credPath}`); process.exit(3) }
-const cred = JSON.parse(fs.readFileSync(credPath, 'utf8'))
+const cred = loadCred()
 for (const k of ['sessdata', 'bili_jct', 'buvid3']) {
   if (!cred[k] || String(cred[k]).trim() === '') { console.error(`凭据文件缺少 ${k}`); process.exit(3) }
 }

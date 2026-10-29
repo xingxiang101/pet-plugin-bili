@@ -1,6 +1,8 @@
 import { DSH_HOME } from './paths.mjs'
 import { resolveRuntime } from './runtime.mjs'
-const runtime = resolveRuntime(DSH_HOME, { allowCurrent: true })
+const runtime = process.env.BILI_PLUGIN_WORKER === '1'
+  ? { file: process.execPath, env: { ...process.env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) } }
+  : resolveRuntime(DSH_HOME, { allowCurrent: true })
 export const NODE_EXE = runtime.file
 export const NODE_ENV = runtime.env
 // Also propagate to existing callers which inherit the tool process environment.

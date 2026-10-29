@@ -82,7 +82,15 @@ async function sendWebhook(url, tpl) {
 
 function sendDesktop() {
   if (DRY) { console.log('[dry] 桌面通知：' + String(text).slice(0, 60)); return }
-  if (process.platform !== 'win32') { console.log(`[通知] ${title}\n${text}`); return }
+  if (process.platform === 'darwin') {
+    const script = 'on run argv\n display notification (item 1 of argv) with title (item 2 of argv)\nend run'
+    execFileSync('/usr/bin/osascript', ['-e', script, '--', String(text), String(title)], { encoding: 'utf8', timeout: 20000 })
+    console.log('桌面通知已提交'); return
+  }
+  if (process.platform !== 'win32') {
+    execFileSync('notify-send', ['--', String(title), String(text)], { encoding: 'utf8', timeout: 20000 })
+    console.log('桌面通知已提交'); return
+  }
   const ps = [
     '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null',
     '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null',
@@ -92,7 +100,7 @@ function sendDesktop() {
     '$node = $xml.GetElementsByTagName("text")',
     '$node.Item(0).AppendChild($xml.CreateTextNode($env:DW_TITLE)) | Out-Null',
     '$node.Item(1).AppendChild($xml.CreateTextNode($env:DW_TEXT)) | Out-Null',
-    '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("DeepSeek Harness").Show([Windows.UI.Notifications.ToastNotification]::new($xml))',
+    '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("桌宠 B 站").Show([Windows.UI.Notifications.ToastNotification]::new($xml))',
     'Remove-Item $env:DW_XML -Force -ErrorAction SilentlyContinue',
   ].join('\n')
   const script = path.join(os.tmpdir(), `dw-toast-${Date.now()}.ps1`)
@@ -168,20 +176,11 @@ try {
     // 注意：这里在模块顶层，不能用 return ✗ → 用 exit(0)（预演到此为止 ✓）
     if (DRY) { console.log('[dry] B站私信（不发送）：' + String(text).slice(0, 80)); process.exit(0) }
     const dmPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dm.mjs')
-    const outF = path.join(os.tmpdir(), `whale-dm-out-${process.pid}-${Date.now()}.txt`)
-    const errF = path.join(os.tmpdir(), `whale-dm-err-${process.pid}-${Date.now()}.txt`)
-    const fdO = fs.openSync(outF, 'w'); const fdE = fs.openSync(errF, 'w')
-    let r
     try {
-      r = spawnSync(NODE_EXE, [dmPath, '--msg', String(text), '--go'], { stdio: ['ignore', fdO, fdE], timeout: 300000 })
-    } finally {
-      try { fs.closeSync(fdO) } catch {}
-      try { fs.closeSync(fdE) } catch {}
+      process.stdout.write(execFileSync(NODE_EXE, [dmPath, '--msg', String(text), '--go'], { encoding: 'utf8', timeout: 300000 }))
+    } catch (error) {
+      throw new Error(String(error.stderr || '私信发送失败'))
     }
-    if (fs.existsSync(outF)) process.stdout.write(fs.readFileSync(outF, 'utf8'))
-    if (r?.status !== 0) console.error((fs.existsSync(errF) ? fs.readFileSync(errF, 'utf8') : '').trim() || '（私信发送失败）')
-    fs.rmSync(outF, { force: true }); fs.rmSync(errF, { force: true })
-    if (r?.error || r?.status !== 0) throw new Error('私信推送失败，未确认送达')
   } else if (type === 'stdout') {
     console.log(`[通知] ${title}\n${text}`)
   } else if (type === 'file') {

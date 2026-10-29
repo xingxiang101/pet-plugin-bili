@@ -86,6 +86,21 @@ if (cmd === 'show' || !cmd) {
     const wants = (sections[wantKey] ?? []).filter((l) => l.trim().startsWith('-') && !/^-\s*（空/.test(l.trim()))
     console.log(`\n【想说但还没说 ${wants.length} 条】`)
     for (const w of wants) console.log('  ' + w.trim().replace(/^-\s*/, '  · ').slice(0, 150))
+    // 桌宠写入的是带时间的自由叙事；单独展示，不能把回复/跳过误计为看过视频。
+    const recent = Object.entries(sections).filter(([heading]) => {
+      if (!/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(heading)) return false
+      const at = new Date(heading)
+      if (!Number.isFinite(at.getTime())) return false
+      const date = at.toLocaleDateString('sv-SE')
+      return date >= since && date <= today()
+    })
+    if (recent.length) {
+      console.log(`\n【近期经历 ${recent.length} 条】`)
+      for (const [heading, body] of recent.slice(-8)) {
+        console.log('  · ' + heading)
+        console.log(body.join('\n').trim().slice(0, 1800))
+      }
+    }
   }
 
   // ② 发言账（她真的对外说了什么）
@@ -113,7 +128,7 @@ if (cmd === 'show' || !cmd) {
   for (const l of lines.slice(-6)) {
     try { const e = JSON.parse(l); console.log(`  · ${String(e.at).slice(5, 16).replace('T', ' ')}  ${e.kind}  ${e.target ?? ''}  ${e.note ?? ''}`) } catch {}
   }
-  console.log('\n（她是主动来找你的：自主发言后必须 notify_wechat —— 见 AGENTS.md「日子」一节）')
+  console.log('\n（自主发言后通过 notify 报备；通知方式在 B 站生活面板配置。）')
   process.exit(0)
 }
 
