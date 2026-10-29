@@ -257,6 +257,92 @@ test('watch accepts only a BV id or official first-part video link',()=>{
  for(const value of ['BV1234567890',' https://www.bilibili.com/video/BV1234567890/?p=1&spm_id_from=test ','https://m.bilibili.com/video/BV1234567890'])assert.equal(videoId(value),'BV1234567890')
  for(const value of ['BV1short','BV1234567890 --go','http://www.bilibili.com/video/BV1234567890','https://b23.tv/abc','https://www.bilibili.com.evil/video/BV1234567890','https://evil@www.bilibili.com/video/BV1234567890','https://www.bilibili.com:8443/video/BV1234567890','https://www.bilibili.com/video/BV1234567890?p=2','https://www.bilibili.com/video/BV1234567890?p=1&p=2','https://www.bilibili.com/opus/123'])assert.throws(()=>videoId(value),/链接|BV/)
 })
+test('chat watch tools are discoverable and require host-authenticated chat context',async()=>{
+ const f=await fixture(),watch=f.tools.get('bili_watch_video'),status=f.tools.get('bili_watch_task')
+ assert.match(watch.promptHint,/只有链接时也直接观看/);assert.match(watch.promptHint,/不要让主人去面板/)
+ assert.deepEqual(watch.schema.parameters.required,['target']);assert.deepEqual(status.schema.parameters.required,['id'])
+ for(const context of [{source:'host'},{source:'plugin-task',aiTaskId:'ai-1'},{}]){
+  await assert.rejects(watch.handler({target:'BV1234567890',source:'chat'},context),/当前聊天/)
+  await assert.rejects(status.handler({id:'some-task',cancel:true},context),/当前聊天/)
+ }
+ assert.equal(f.calls.length,0);assert.equal(f.starts,0);await f.controller.dispose()
+})
+test('chat watch returns before media finishes and later delivers one real analysis',async()=>{
+ const f=await fixture(),image='data:image/jpeg;base64,QUFB'
+ f.engine.start=async args=>{f.calls.push(args);f.jobs.set('chat-video',{id:'chat-video',status:'running'});return'chat-video'}
+ const accepted=JSON.parse((await f.tools.get('bili_watch_video').handler({target:'https://www.bilibili.com/video/BV1234567890',question:'你最喜欢哪个画面？'},{source:'chat'})).text)
+ assert.equal(accepted.target,'BV1234567890');assert.ok(accepted.taskId);assert.equal(accepted.text,undefined);assert.equal(accepted.jobId,undefined);assert.equal(f.starts,0)
+ assert.match(accepted.next,/结束本回合/);assert.equal(f.cfg.enabled,false);assert.equal(f.cfg.owner.mid,'')
+ const progress=JSON.parse((await f.tools.get('bili_watch_task').handler({id:accepted.taskId},{source:'chat'})).text)
+ assert.equal(progress.taskId,accepted.taskId);assert.equal(progress.jobId,undefined);assert.equal(progress.images,undefined);assert.equal(progress.text,undefined);assertStrictJson(progress)
+ f.jobs.set('chat-video',{id:'chat-video',status:'completed',result:{text:'本次真实视频材料',images:[image],exitCode:0}})
+ await until(()=>f.deliveries.length===1)
+ assert.equal(f.starts,1);assert.deepEqual(f.prompts[0].opts.tools,[]);assert.deepEqual(f.prompts[0].opts.images,[image]);assert.match(f.prompts[0].prompt,/你最喜欢哪个画面/)
+ const result=JSON.parse((await f.tools.get('bili_watch_task').handler({id:accepted.taskId},{source:'chat'})).text)
+ assert.equal(result.status,'completed');assert.equal(result.text,'完成真实任务');assert.equal(result.delivery,'chat');assert.equal(result.aiTaskId,undefined);assert.equal(result.images,undefined);assertStrictJson(result)
+ await f.controller.dispose()
+})
+test('chat watch deduplicates matching in-flight requests but not new questions or completed watches',async()=>{
+ const f=await fixture(),watch=f.tools.get('bili_watch_video').handler;let count=0
+ f.engine.start=async args=>{const id='chat-'+(++count);f.calls.push(args);f.jobs.set(id,{id,status:'running'});return id}
+ const calls=await Promise.all([watch({target:'BV1234567890'},{source:'chat'}),watch({target:'https://www.bilibili.com/video/BV1234567890/'},{source:'chat'})])
+ const first=JSON.parse(calls[0].text),duplicate=JSON.parse(calls[1].text)
+ assert.equal(first.taskId,duplicate.taskId);assert.equal(count,1)
+ const different=JSON.parse((await watch({target:'BV1234567890',question:'只聊背景颜色'},{source:'chat'})).text)
+ assert.notEqual(first.taskId,different.taskId);assert.equal(count,2)
+ for(const [id]of f.jobs)f.jobs.set(id,{id,status:'completed',result:{text:'真实素材',images:['data:image/png;base64,QUFB'],exitCode:0}})
+ await until(()=>f.deliveries.length===2)
+ const again=JSON.parse((await watch({target:'BV1234567890'},{source:'chat'})).text)
+ assert.notEqual(first.taskId,again.taskId);assert.equal(count,3)
+ await f.tools.get('bili_watch_task').handler({id:again.taskId,cancel:true},{source:'chat'});await f.controller.dispose()
+})
+test('chat watch progress and cancellation cannot consume media or cancel another queued watch',async()=>{
+ const f=await fixture(),watch=f.tools.get('bili_watch_video').handler,status=f.tools.get('bili_watch_task').handler;let count=0
+ f.engine.start=async args=>{const id='task-video-'+(++count);f.calls.push(args);f.jobs.set(id,count===1?{id,status:'running'}:{id,status:'completed',result:{text:'第二条素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return id}
+ const first=JSON.parse((await watch({target:'BV1234567890'},{source:'chat'})).text)
+ await until(async()=>(await f.controller.getState()).tasks[0].stage==='media')
+ const second=JSON.parse((await watch({target:'BV0987654321'},{source:'chat'})).text)
+ const cancelled=JSON.parse((await status({id:first.taskId,cancel:true},{source:'chat'})).text)
+ assert.equal(cancelled.status,'cancelled')
+ await assert.rejects(status({id:'task-video-2',cancel:true},{source:'chat'}),/未找到/)
+ const queued=JSON.parse((await status({id:second.taskId},{source:'chat'})).text);assert.equal(queued.text,undefined);assert.equal(queued.images,undefined)
+ await until(()=>f.deliveries.length===1)
+ const completed=JSON.parse((await status({id:second.taskId},{source:'chat'})).text)
+ assert.equal(completed.status,'completed');assert.equal(f.starts,1);assert.ok(!f.calls.some(args=>args[0]==='cancel'&&args[1]==='task-video-2'))
+ await f.controller.dispose()
+})
+test('chat watch refuses aborted entry, missing login and old SDK without starting media',async()=>{
+ const f=await fixture(),signal=AbortSignal.abort()
+ await assert.rejects(f.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat',signal}),/abort/i)
+ assert.equal(f.calls.length,0);await f.controller.dispose()
+ const g=await fixture({logged:false})
+ await assert.rejects(g.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'}),/连接/);assert.equal(g.calls.length,0);await g.controller.dispose()
+ const h=await fixture();delete h.pet.ai.deliver
+ await assert.rejects(h.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'}),/更新测试宿主/);assert.equal(h.calls.length,0);await h.controller.dispose()
+})
+test('failed chat watch reports real failure locally without another model request or false reply',async()=>{
+ const f=await fixture(),bubbles=[];f.pet.pet={bubble:async text=>bubbles.push(text)}
+ const accepted=JSON.parse((await f.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'})).text)
+ await until(()=>bubbles.length===1)
+ const result=JSON.parse((await f.tools.get('bili_watch_task').handler({id:accepted.taskId},{source:'chat'})).text)
+ assert.equal(result.status,'failed');assert.match(result.error,/未完成/);assert.equal(result.text,undefined);assert.match(bubbles[0],/没能看完/)
+ assert.equal(f.starts,0);assert.deepEqual(f.deliveries,[]);await f.controller.dispose()
+})
+test('cancelled or stale chat watch never emits a failure bubble into another scope',async()=>{
+ const f=await fixture(),bubbles=[];f.pet.pet={bubble:async text=>bubbles.push(text)}
+ f.engine.start=async()=>{f.jobs.set('scope-media',{id:'scope-media',status:'running'});return'scope-media'}
+ const accepted=JSON.parse((await f.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'})).text)
+ await until(async()=>(await f.controller.getState()).tasks[0].stage==='media')
+ f.setScope({scopeId:'other',revision:2})
+ await until(async()=>(await f.controller.getState()).tasks[0].status==='failed')
+ assert.deepEqual(bubbles,[]);assert.deepEqual(f.deliveries,[])
+ await assert.rejects(f.tools.get('bili_watch_task').handler({id:accepted.taskId},{source:'chat'}),/身份已切换/);await f.controller.dispose()
+ const g=await fixture(),cancelBubbles=[];g.pet.pet={bubble:async text=>cancelBubbles.push(text)}
+ g.engine.start=async()=>{g.jobs.set('cancel-media',{id:'cancel-media',status:'running'});return'cancel-media'}
+ const task=JSON.parse((await g.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'})).text)
+ await g.tools.get('bili_watch_task').handler({id:task.taskId,cancel:true},{source:'chat'})
+ await new Promise(resolve=>setTimeout(resolve,350));assert.deepEqual(cancelBubbles,[]);assert.deepEqual(g.deliveries,[]);await g.controller.dispose()
+})
 test('watch service checks caller, login, SDK and queue before starting fixed media work',async()=>{
  const f=await fixture({logged:false})
  await assert.rejects(f.controller.api.watchVideo({target:'BV1234567890'}),/本插件/)
