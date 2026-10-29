@@ -5,7 +5,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('nod
 const HOST=path.resolve(process.env.PET_PLUGIN_HOST_DIR||'');
 if(!process.env.PET_PLUGIN_HOST_DIR)throw Error('Set PET_PLUGIN_HOST_DIR to the actual desktop-pet/demo checkout.');
 const H=require(path.join(HOST,'../tests/e2e-helpers'));
-const {activateButton}=require(path.join(HOST,'../tests/e2e/html-card-input'));
+const {activateButton,activateClosingButton}=require(path.join(HOST,'../tests/e2e/html-card-input'));
 const ROOT=path.resolve(__dirname,'..'),ZIP=path.resolve(process.env.PET_BILI_PLUGIN_ZIP||path.join(ROOT,'dist','bili-0.1.0.zip')),CDP=Number(process.env.PET_BILI_E2E_CDP_PORT)||9488;
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-pet-bili-'));
 const artifact=path.join(ROOT,'artifacts','electron-e2e');fs.mkdirSync(artifact,{recursive:true});
@@ -76,8 +76,12 @@ try{
   check(await H.evalIn(panel,"!!document.querySelector('#choose-text') && document.querySelector('#edit-dynamic-save').disabled"),'dynamic editing has a text import and explicit check-before-save controls');
   await H.evalIn(panel,"document.querySelector('#edit-dynamic-text').focus()");await H.cdp(panel,'Input.insertText',{text:'本地编辑夹具，尚未发布'});
   const editShot=await H.cdp(panel,'Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(artifact,'edit-dynamic.png'),Buffer.from(editShot.data,'base64'));
-  await H.evalIn(app.settings,"settings.pluginsTogglePanel('bili')");check(await H.waitTargetGone(CDP,'/bili/panel/index.html'),'closing panel leaves background plugin active');
+  await H.evalIn(panel,"document.querySelector('#close-panel').scrollIntoView({block:'center'})");
+  const closeShot=await H.cdp(panel,'Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(artifact,'close-control.png'),Buffer.from(closeShot.data,'base64'));
+  await activateClosingButton(CDP,panel,'#close-panel');check(await H.waitTargetGone(CDP,'/bili/panel/index.html'),'visible close button closes the panel');
+  check(await H.evalIn(app.settings,"settings.pluginsList().then(list=>list.find(p=>p.id==='bili')?.status==='active')"),'closing the panel leaves the plugin active');
   panel=await open(app.settings);check(await H.evalIn(panel,"document.querySelector('[name=\"owner.mid\"]').value==='123456789'"),'settings survive close and reopen');
+  check(await H.evalIn(panel,"pet.services.invoke('bili-control','state',[{}]).then(value=>!value.account&&!value.enabled)"),'reopening preserves account state and keeps autonomous activity paused');
   await H.evalIn(app.pet,"window.petAPI.e2eConfigPatch({character:'nienie'})");
   await wait(()=>H.evalIn(panel,"pet.services.invoke('bili-control','settings',[{}]).then(value=>value.owner.mid==='')").catch(()=>false),'new pet scoped state');
   await wait(()=>H.evalIn(panel,"!document.querySelector('main').inert && document.querySelector('[name=\"owner.mid\"]').value===''"),'panel resets visible owner on pet switch');

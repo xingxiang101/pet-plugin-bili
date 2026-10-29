@@ -111,6 +111,7 @@ async function pollLogin(){
 }
 document.querySelectorAll('nav button').forEach(button=>button.onclick=()=>{document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-selected',String(b===button)));document.querySelectorAll('.tab').forEach(tab=>tab.classList.toggle('active',tab.id===button.dataset.tab));if(button.dataset.tab==='drafts')loadDrafts().catch(e=>notice(e.message,true));if(button.dataset.tab==='tasks')refreshState().catch(e=>notice(e.message,true));});
 $('#refresh').onclick=()=>action($('#refresh'),refresh);
+$('#close-panel').onclick=()=>window.pet.ui.closePanel().catch(error=>notice(error.message||'暂时无法关闭面板。',true));
 $('#settings-form').addEventListener('input',markDirty);
 $('#add-window').onclick=()=>{if($('#windows').children.length>=6)return;windowRow();markDirty();};
 $('#settings-form').onsubmit=event=>{event.preventDefault();const button=event.submitter;action(button,async()=>{fillSettings(await call('saveSettings',readSettings()));notice('设置已保存。');await refreshState();});};
