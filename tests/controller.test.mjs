@@ -1,18 +1,25 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createController, normalizeSettings, backgroundPrompt } from '../src/controller.mjs'
+import { createController, normalizeSettings, backgroundPrompt, videoId } from '../src/controller.mjs'
 const meta={sdkCaller:{kind:'plugin',id:'bili',context:'panel'}}
 const copy=value=>JSON.parse(JSON.stringify(value))
+function assertStrictJson(value,path='$'){
+ if(value===null||typeof value==='string'||typeof value==='boolean')return
+ if(typeof value==='number'){assert.ok(Number.isFinite(value),path+' must be finite');return}
+ assert.equal(typeof value,'object',path+' must contain only JSON values')
+ assert.ok(Array.isArray(value)||Object.getPrototypeOf(value)===Object.prototype,path+' must be a plain object or array')
+ for(const [key,item]of Object.entries(value))assertStrictJson(item,path+'.'+key)
+}
 const until=async predicate=>{for(let i=0;i<600;i++){if(await predicate())return;await new Promise(r=>setTimeout(r,5))}throw Error('timed out')}
 async function fixture(options={}){
-  const data=options.data||new Map(),secrets=new Map(),files=new Map(),jobs=new Map(),tools=new Map(),calls=[],prompts=[]
+  const data=options.data||new Map(),secrets=new Map(),files=new Map(),jobs=new Map(),tools=new Map(),calls=[],prompts=[],deliveries=[]
   let cfg=normalizeSettings(options.config||{}),authOptions,scope={scopeId:'scope-a',revision:1},starts=0
   if(options.logged!==false)secrets.set('bili.credentials.test',JSON.stringify({sessdata:'test-login-value-123456789',bili_jct:'a'.repeat(32),mid:'42',name:'pet-bili'}))
   const engine={dataDir:'/isolated',getConfig:async()=>cfg,setConfig:async value=>{cfg=copy(value)},readState:async p=>files.get(p),writeState:async(p,value)=>{files.set(p,copy(value))},accountChanged:()=>{calls.push(['accountChanged'])},dispose:()=>{calls.push(['dispose'])},cancel:id=>{calls.push(['cancel',id]);return true},start:async args=>{calls.push(args);const id='job-'+calls.length;jobs.set(id,{id,status:'completed',result:{text:'done',images:[],exitCode:0}});return id},get:id=>jobs.get(id),run:async args=>{calls.push(args);if(options.run)return options.run(args);return{text:args[0]==='dm-await'?JSON.stringify({hit:false}):args[0]==='inbox'?JSON.stringify({items:[]}):'done',images:[],exitCode:0}}}
-  const pet={storage:{get:async(k,fallback)=>data.has(k)?copy(data.get(k)):fallback,set:async(k,v)=>{data.set(k,copy(v))}},secrets:{get:async k=>secrets.get(k),set:async(k,v)=>{secrets.set(k,v)},delete:async k=>secrets.delete(k)},profile:{getScope:async()=>({...scope})},ai:{start:async(prompt,opts)=>{starts++;prompts.push({prompt,opts});return{id:'ai-'+starts,status:'running'}},get:async()=>options.pendingAI?{status:'running'}:{status:'completed',text:'完成真实任务'},cancel:async id=>{calls.push(['ai.cancel',id]);options.pendingAI=false;return true}},tools:{register:spec=>tools.set(spec.name,{...spec,handler:(input,context={source:'host'})=>spec.handler(input,context)})},scheduler:{every:async()=> 'timer-1',cancel:async id=>{calls.push(['timer.cancel',id])}}}
+  const pet={storage:{get:async(k,fallback)=>data.has(k)?copy(data.get(k)):fallback,set:async(k,v)=>{data.set(k,copy(v))}},secrets:{get:async k=>secrets.get(k),set:async(k,v)=>{secrets.set(k,v)},delete:async k=>secrets.delete(k)},profile:{getScope:async()=>({...scope})},ai:{start:async(prompt,opts)=>{starts++;prompts.push({prompt,opts});return{id:'ai-'+starts,status:'running'}},get:async()=>options.pendingAI?{status:'running'}:{status:'completed',text:'完成真实任务'},cancel:async id=>{calls.push(['ai.cancel',id]);options.pendingAI=false;return true},deliver:async id=>{deliveries.push(id);return true}},tools:{register:spec=>tools.set(spec.name,{...spec,handler:(input,context={source:'host'})=>spec.handler(input,context)})},scheduler:{every:async()=> 'timer-1',cancel:async id=>{calls.push(['timer.cancel',id])}}}
   const controller=await createController({pet,engine,scopeKey:'test',scopeId:'scope-a',scopeRevision:1,now:options.now||Date.now,random:()=>0,verify:options.verify||(async()=>({mid:'42',name:'pet-bili'})),authFactory:opts=>{authOptions=opts;return{start:async()=>({id:'qr',status:'waiting',image:'data:image/png;base64,AA=='}),poll:async()=>({status:'waiting'}),cancel:()=>({status:'cancelled'}),dispose:()=>{}}}})
   controller.registerTools()
-  return{controller,engine,pet,data,secrets,files,jobs,tools,calls,prompts,get starts(){return starts},setScope:value=>{scope=value},get auth(){return authOptions},get cfg(){return cfg}}
+  return{controller,engine,pet,data,secrets,files,jobs,tools,calls,prompts,deliveries,get starts(){return starts},setScope:value=>{scope=value},get auth(){return authOptions},get cfg(){return cfg}}
 }
 test('settings retain same-pet identity and bound schedule while rejecting invalid input',()=>{
   const value=normalizeSettings({persona:{name:'independent whale'},diary:{enabled:false},night:{maxVideos:999},listen:{commentIntervalSec:1}})
@@ -36,7 +43,18 @@ test('background task uses scoped AI tools and host persona; completes with real
   await until(async()=> (await f.controller.getState()).tasks.find(x=>x.id===task.id).status==='completed')
   assert.equal(f.starts,1);assert.deepEqual(f.prompts[0].opts.tools,['bili_command','bili_job','bili_journal'])
   assert.match(f.prompts[0].prompt,/沿用宿主当前角色/);assert.match(f.prompts[0].prompt,/不可信材料/)
+  assert.deepEqual(f.deliveries,[])
   await f.controller.dispose()
+})
+test('queued and running task service responses contain only strict JSON values',async()=>{
+ const f=await fixture({pendingAI:true}),running=f.controller.enqueue('skip','fixture')
+ await until(()=>f.starts===1)
+ const queued=f.controller.enqueue('skip','fixture'),state=await f.controller.api.state({},meta)
+ assert.equal(state.tasks.find(task=>task.id===running.id).status,'running');assert.equal(state.tasks.find(task=>task.id===queued.id).status,'queued')
+ for(const task of state.tasks){assert.ok(!Object.hasOwn(task,'text'));assert.ok(!Object.hasOwn(task,'request'))}
+ assertStrictJson(state)
+ for(const id of [running.id,queued.id]){const result=await f.controller.api.aiTask({id},meta);assert.equal(result.text,'');assert.equal(result.next,null);assertStrictJson(result)}
+ await f.controller.dispose()
 })
 test('normal empty inbox never spends AI tokens',async()=>{
   const f=await fixture({config:{enabled:true,owner:{mid:'9'},night:{windows:[]},listen:{dm:true}}})
@@ -228,12 +246,105 @@ test('manual long video command really resumes with images and returns through c
  await new Promise(resolve=>setTimeout(resolve,20));assert.equal(f.starts,0)
  f.jobs.set(id,{id,status:'completed',result:{text:'真实媒体结果',images:[image],exitCode:0}})
  await until(()=>f.starts===1);assert.equal(f.prompts[0].opts.images[0],image);assert.match(f.prompts[0].prompt,/看这个视频并告诉我画面/)
- await until(()=>spoken.length===1);assert.equal((await f.controller.getState()).tasks[0].status,'completed');await f.controller.dispose()
+ await until(()=>f.deliveries.length===1);assert.deepEqual(f.deliveries,['ai-1']);assert.equal(spoken.length,0);assert.equal((await f.controller.getState()).tasks[0].status,'completed');await f.controller.dispose()
 })
 test('manual tool result already returned to chat is not analyzed twice',async()=>{
  const f=await fixture();const result=await f.tools.get('bili_command').handler({args:['video','BV1fixture']},{source:'chat'});const id=JSON.parse(result.text).id
  await f.tools.get('bili_job').handler({id},{source:'chat'})
  await until(async()=>(await f.controller.getState()).tasks[0]?.status==='completed');assert.equal(f.starts,0);await f.controller.dispose()
+})
+test('watch accepts only a BV id or official first-part video link',()=>{
+ for(const value of ['BV1234567890',' https://www.bilibili.com/video/BV1234567890/?p=1&spm_id_from=test ','https://m.bilibili.com/video/BV1234567890'])assert.equal(videoId(value),'BV1234567890')
+ for(const value of ['BV1short','BV1234567890 --go','http://www.bilibili.com/video/BV1234567890','https://b23.tv/abc','https://www.bilibili.com.evil/video/BV1234567890','https://evil@www.bilibili.com/video/BV1234567890','https://www.bilibili.com:8443/video/BV1234567890','https://www.bilibili.com/video/BV1234567890?p=2','https://www.bilibili.com/video/BV1234567890?p=1&p=2','https://www.bilibili.com/opus/123'])assert.throws(()=>videoId(value),/链接|BV/)
+})
+test('watch service checks caller, login, SDK and queue before starting fixed media work',async()=>{
+ const f=await fixture({logged:false})
+ await assert.rejects(f.controller.api.watchVideo({target:'BV1234567890'}),/本插件/)
+ await assert.rejects(f.controller.api.watchVideo({target:'BV1234567890'},meta),/先连接/);assert.equal(f.calls.length,0)
+ await f.controller.dispose()
+ const g=await fixture();delete g.pet.ai.deliver
+ await assert.rejects(g.controller.api.watchVideo({target:'BV1234567890'},meta),/更新测试宿主/);assert.equal(g.calls.length,0);await g.controller.dispose()
+ const h=await fixture({pendingAI:true});for(let i=0;i<8;i++)h.controller.enqueue('skip','fixture')
+ await assert.rejects(h.controller.api.watchVideo({target:'BV1234567890'},meta),/队列已满/);assert.ok(!h.calls.some(args=>args[0]==='watch-video'));await h.controller.dispose()
+})
+test('watch uses real images with no autonomous activity or owner UID and delivers once',async()=>{
+ const f=await fixture(),image='data:image/jpeg;base64,QUFB'
+ f.engine.start=async args=>{f.calls.push(args);f.jobs.set('watch',{id:'watch',status:'completed',result:{text:'标题与真实画面素材',images:[image],exitCode:0}});return'watch'}
+ const task=await f.controller.api.watchVideo({target:'https://www.bilibili.com/video/BV1234567890',question:'最喜欢哪个画面？'},meta)
+ assert.equal(f.cfg.enabled,false);assert.equal(f.cfg.owner.mid,'');assert.equal(task.source,'watch')
+ await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='completed')
+ assert.deepEqual(f.calls[0],['watch-video','BV1234567890','3x3','--uniform','--tile','640']);assert.equal(f.starts,1)
+ assert.deepEqual(f.prompts[0].opts.tools,[]);assert.deepEqual(f.prompts[0].opts.images,[image]);assert.match(f.prompts[0].prompt,/最喜欢哪个画面/)
+ assert.deepEqual(f.deliveries,['ai-1']);const result=await f.controller.api.aiTask({id:task.id},meta);assert.equal(result.delivery,'chat');assert.equal(result.text,'完成真实任务')
+ for(const file of ['.dsh/whale-diary.md','.dsh/whale-diary-private.md'])assert.match(f.files.get(file),/完成真实任务/)
+ await f.controller.dispose()
+})
+test('watch cancels media work when scope changes while engine.start awaits',async()=>{
+ const f=await fixture();let release,entered=false
+ f.engine.start=async()=>{entered=true;return new Promise(resolve=>{release=resolve})}
+ const pending=f.controller.api.watchVideo({target:'BV1234567890'},meta);await until(()=>entered)
+ f.setScope({scopeId:'scope-b',revision:2});release('stale-watch');await assert.rejects(pending,/身份已切换/)
+ assert.ok(f.calls.some(args=>args[0]==='cancel'&&args[1]==='stale-watch'));assert.equal(f.starts,0);assert.deepEqual(f.deliveries,[]);await f.controller.dispose()
+})
+test('watch cleans a newly started media job if the queue fills before enqueue',async()=>{
+ const f=await fixture({pendingAI:true});let release,entered=false
+ f.engine.start=async()=>{entered=true;return new Promise(resolve=>{release=resolve})}
+ const pending=f.controller.api.watchVideo({target:'BV1234567890'},meta);await until(()=>entered)
+ for(let i=0;i<8;i++)f.controller.enqueue('skip','fixture')
+ release('overflow-watch');await assert.rejects(pending,/队列已满/)
+ assert.ok(f.calls.some(args=>args[0]==='cancel'&&args[1]==='overflow-watch'));assert.ok(!(await f.controller.getState()).tasks.some(task=>task.source==='watch'));await f.controller.dispose()
+})
+test('watch media without actual screenshots fails before AI and cleans the job',async()=>{
+ const f=await fixture();const task=await f.controller.api.watchVideo({target:'BV1234567890'},meta)
+ await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='failed')
+ assert.equal(f.starts,0);assert.deepEqual(f.deliveries,[]);assert.ok(f.calls.some(args=>args[0]==='cancel'&&args[1]===task.jobId));await f.controller.dispose()
+})
+test('canceling one watch during media wait preserves the next queued watch',async()=>{
+ const f=await fixture();let jobs=0
+ f.engine.start=async args=>{const id='watch-'+(++jobs);f.calls.push(args);f.jobs.set(id,jobs===1?{id,status:'running'}:{id,status:'completed',result:{text:'第二个视频的真实素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return id}
+ const first=await f.controller.api.watchVideo({target:'BV1234567890'},meta)
+ await until(async()=>(await f.controller.api.aiTask({id:first.id},meta)).stage==='media')
+ const second=await f.controller.api.watchVideo({target:'BV0987654321'},meta)
+ assert.equal((await f.controller.api.aiTask({id:second.id},meta)).status,'queued');assert.equal(f.starts,0)
+ await f.controller.api.cancelTask({id:first.id},meta)
+ await until(async()=>(await f.controller.api.aiTask({id:second.id},meta)).status==='completed')
+ assert.equal((await f.controller.api.aiTask({id:first.id},meta)).status,'cancelled');assert.equal(f.starts,1);assert.deepEqual(f.deliveries,['ai-1'])
+ assert.ok(f.calls.some(args=>args[0]==='cancel'&&args[1]===first.jobId));assert.ok(!f.calls.some(args=>args[0]==='accountChanged'||args[0]==='cancel'&&args[1]===second.jobId));await f.controller.dispose()
+})
+test('empty final AI output is a failed watch rather than a delivered reply',async()=>{
+ const f=await fixture();f.pet.ai.get=async()=>({status:'completed',text:''})
+ f.engine.start=async()=>{f.jobs.set('watch',{id:'watch',status:'completed',result:{text:'素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return'watch'}
+ const task=await f.controller.api.watchVideo({target:'BV1234567890'},meta)
+ await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='failed')
+ assert.equal(f.starts,1);assert.deepEqual(f.deliveries,[]);assert.equal(f.files.size,0);await f.controller.dispose()
+})
+test('manual multi-stage workflow delivers only its final completed AI task',async()=>{
+ const f=await fixture();let phase=0
+ f.pet.ai.get=async()=>{if(phase++===0){await f.tools.get('bili_command').handler({args:['video','BV1234567890']},{source:'plugin-task',aiTaskId:'ai-1'});return{status:'completed',text:'等待补充材料'}}return{status:'completed',text:'完整最终答复'}}
+ const started=await f.tools.get('bili_command').handler({args:['video','BV1234567890'],request:'读取后告诉我看法'},{source:'chat'})
+ const jobId=JSON.parse(started.text).id
+ await until(async()=>(await f.controller.getState()).tasks.find(task=>task.jobId===jobId)?.status==='completed')
+ assert.equal(f.starts,2);assert.deepEqual(f.deliveries,['ai-2']);assert.equal((await f.controller.getState()).tasks[0].text,'完整最终答复');await f.controller.dispose()
+})
+test('delivery failure keeps full paged fallback and journal failure does not repeat AI',async()=>{
+ const f=await fixture(),text='完整回复。'.repeat(5000)
+ f.pet.ai.get=async()=>({status:'completed',text});f.pet.ai.deliver=async id=>{f.deliveries.push(id);throw Error('chat unavailable')}
+ f.engine.writeState=async()=>{throw Error('disk unavailable')}
+ f.engine.start=async()=>{f.jobs.set('watch',{id:'watch',status:'completed',result:{text:'素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return'watch'}
+ const task=await f.controller.api.watchVideo({target:'BV1234567890'},meta)
+ await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='completed')
+ let result,actual='',offset=0;do{result=await f.controller.api.aiTask({id:task.id,offset},meta);actual+=result.text;offset=result.next}while(offset!==null)
+ assert.equal(actual,text);assert.equal(result.delivery,'unavailable');assert.equal(result.journal,'unavailable');assert.equal(f.starts,1);assert.deepEqual(f.deliveries,['ai-1']);assert.equal((await f.controller.getState()).tasks[0].text.length,700);await f.controller.dispose()
+})
+test('cancel while final delivery waits revokes the completed AI task before chat commits',async()=>{
+ const f=await fixture();let delivering=false,release,committed=false,revoked=false
+ f.engine.start=async()=>{f.jobs.set('watch',{id:'watch',status:'completed',result:{text:'素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return'watch'}
+ f.pet.ai.deliver=async id=>{delivering=true;await new Promise(resolve=>{release=resolve});if(revoked)throw Error('revoked before commit');committed=true;return true}
+ f.pet.ai.cancel=async id=>{f.calls.push(['ai.cancel',id]);if(delivering){revoked=true;release()}return true}
+ const task=await f.controller.api.watchVideo({target:'BV1234567890'},meta);await until(()=>delivering)
+ await f.controller.api.cancelTask({id:task.id},meta)
+ await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='cancelled')
+ assert.ok(f.calls.some(args=>args[0]==='ai.cancel'&&args[1]==='ai-1'));assert.equal(committed,false);assert.equal(f.starts,1);await f.controller.dispose()
 })
 test('comment backlog advances only the resolved batch, including same-second ids',async()=>{
  let time=200000;const items=Array.from({length:25},(_,i)=>({kind:'reply',id:String(i+1),t:101,mid:'8',oid:'1',root:'2',parent:String(i+10),business:'1'}))

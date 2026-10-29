@@ -3,6 +3,7 @@ const $ = selector => document.querySelector(selector);
 let panelEpoch = 0;
 const call = async (method, value = {}) => {const epoch=panelEpoch;const result=await window.pet.services.invoke('bili-control',method,[value]);if(epoch!==panelEpoch)throw Error('宠物身份已切换，请重新查看当前设置。');return result;};
 let settings, dirty = false, loginId, loginTimer, closed = false;
+let watchTaskId=null,watchLoadedId=null,watchSubmitting=false,watchCanStart=false,watchRunning=false,watchAccountKey=null;
 const statusText = { queued:'等待执行', running:'进行中', completed:'已完成', failed:'未完成', cancelled:'已取消', interrupted:'重启后待核查' };
 const kindText = { night:'浏览视频', skip:'本次休息', dm:'主人私信', comment:'评论与 @', live:'直播弹幕', manual:'对话异步任务' };
 function notice(message, error = false) { $('#notice').textContent = message; $('#notice').classList.toggle('error', error); }
@@ -46,6 +47,29 @@ function readSettings() {
   return next;
 }
 function markDirty(){dirty=true;$('#dirty').textContent='有未保存的修改';}
+async function fullTask(id){
+  let value,text='',offset=0;
+  do{value=await call('aiTask',{id,offset});if(!value)return null;text+=value.text||'';offset=value.next;}while(offset!==null);
+  return{...value,text};
+}
+function watchButton(){ $('#watch-submit').disabled=!watchCanStart||watchSubmitting||watchRunning; }
+async function refreshWatch(value){
+  const accountKey=value.account?.mid||'';
+  if(watchAccountKey!==null&&watchAccountKey!==accountKey){watchTaskId=null;watchLoadedId=null;$('#watch-target').value='';$('#watch-question').value='';$('#watch-result').textContent='';$('#watch-fallback').hidden=true;}
+  watchAccountKey=accountKey;
+  watchCanStart=!!value.account&&value.aiAvailable&&value.chatDeliveryAvailable;
+  if(!watchTaskId)watchTaskId=[...value.tasks].reverse().find(task=>task.source==='watch')?.id||null;
+  const task=watchTaskId?(value.tasks.find(task=>task.id===watchTaskId)||await call('aiTask',{id:watchTaskId})):null;
+  watchRunning=!!task&&['queued','running'].includes(task.status);
+  watchButton();$('#watch-cancel').hidden=!watchRunning;
+  if(!task){$('#watch-status').textContent=!value.account?'连接 B 站账号后即可开始，无需开启自主活动或填写主人 UID。':!value.aiAvailable||!value.chatDeliveryAvailable?'当前宿主不支持观看后回复到聊天，请更新测试宿主。':'已就绪。单次观看无需开启自主活动或填写主人 UID。';return;}
+  const progress=task.status==='queued'?'已加入观看队列。':task.status==='running'?({media:'正在下载视频并抽取画面…',analysis:'正在理解画面并整理回复…',delivery:'正在把回复送到桌宠聊天…'}[task.stage]||'正在观看…'):task.status==='completed'?(task.delivery==='chat'?'看完了，已回复到桌宠聊天。':'回复已生成，但暂未送达聊天；可在下方查看完整回复。'):task.status==='cancelled'?'观看已取消。':task.error||'本次观看未完成，可查看任务记录后重试。';
+  $('#watch-status').textContent=progress+(task.journal==='unavailable'?' 本次日记未完整保存，回复已保留。':'');
+  if(!watchRunning&&task.text&&watchLoadedId!==task.id){
+    const result=await fullTask(task.id);if(!result)return;
+    $('#watch-result').textContent=result.text;$('#watch-fallback').hidden=false;$('#watch-fallback').open=task.delivery!=='chat';watchLoadedId=task.id;
+  }
+}
 async function refreshState(){
   const value=await call('state');
   $('#account-state').textContent=value.account?`已连接：${value.account.name||'B 站账号'}（UID ${value.account.mid}）`:'尚未连接 B 站账号';
@@ -55,12 +79,13 @@ async function refreshState(){
     const row=document.createElement('div');row.className='task';
     row.append(textNode('strong',`${kindText[task.kind]||task.kind} · ${statusText[task.status]||task.status}`),textNode('p',new Date(task.at).toLocaleString(),'time'));
     if(task.error)row.append(textNode('p',task.error));
-    if(task.text){const details=document.createElement('details');details.append(textNode('summary','查看结果'),textNode('pre',task.text));row.append(details);}
+    if(task.text){const details=document.createElement('details'),output=textNode('pre',task.text);details.append(textNode('summary','查看完整结果'),output);details.addEventListener('toggle',()=>{if(details.open&&!details.dataset.loaded)fullTask(task.id).then(value=>{if(value){output.textContent=value.text;details.dataset.loaded='true';}}).catch(error=>notice(error.message,true));});row.append(details);}
     if(['queued','running'].includes(task.status)){const button=textNode('button','取消','quiet');button.onclick=()=>action(button,async()=>{await call('cancelTask',{id:task.id});await refreshState();});row.append(button);}
     list.append(row);
   }
   if(!value.tasks.length)list.append(textNode('p','暂无后台任务。','hint'));
   $('#logs').textContent=value.logs.map(x=>`${new Date(x.at).toLocaleString()}  ${x.message}`).join('\n')||'暂无运行记录。';
+  await refreshWatch(value);
 }
 async function refresh(){await refreshState();if(!settings||!dirty)fillSettings(await call('settings'));if(settings){$('main').inert=false;$('#settings-form').dataset.ready='true';}}
 async function pollJob(id,output,images){
@@ -119,6 +144,14 @@ $('#manual-login').onclick=()=>action($('#manual-login'),async()=>{const input=$
 $('#login').onclick=()=>action($('#login'),async()=>{clearTimeout(loginTimer);const value=await call('loginStart');loginId=value.id;showLogin(value);pollLogin();});
 $('#cancel-login').onclick=()=>action($('#cancel-login'),async()=>{clearTimeout(loginTimer);showLogin(await call('loginCancel',{id:loginId}));loginId=null;});
 $('#logout').onclick=()=>action($('#logout'),async()=>{await call('logout');notice('B 站账号已退出。');await refresh();});
+$('#watch-form').onsubmit=async event=>{
+  event.preventDefault();if(watchSubmitting||watchRunning)return;
+  watchSubmitting=true;watchButton();const epoch=panelEpoch;
+  try{const task=await call('watchVideo',{target:$('#watch-target').value,question:$('#watch-question').value});watchTaskId=task.id;watchLoadedId=null;$('#watch-result').textContent='';$('#watch-fallback').hidden=true;notice('观看任务已开始，完成后会回复到桌宠聊天。');await refreshState();}
+  catch(error){if(epoch===panelEpoch)notice(error.message||'无法开始观看，请稍后重试。',true);}
+  finally{if(epoch===panelEpoch){watchSubmitting=false;watchButton();}}
+};
+$('#watch-cancel').onclick=()=>action($('#watch-cancel'),async()=>{if(watchTaskId)await call('cancelTask',{id:watchTaskId});await refreshState();});
 $('#diagnostics').onclick=()=>action($('#diagnostics'),()=>command(['deps','--json'],$('#diagnostics-output')));
 $('#wake').onclick=()=>action($('#wake'),async()=>{await call('wake');notice('浏览任务已加入队列。');await refreshState();});
 $('#load-diary').onclick=()=>action($('#load-diary'),async()=>{const value=await call('diary',{private:$('#diary-kind').value==='private'});$('#diary-output').textContent=value.text||'还没有日记。';});
@@ -147,6 +180,8 @@ $('#edit-dynamic-check').onclick=()=>action($('#edit-dynamic-check'),async()=>{r
 $('#edit-dynamic-save').onclick=()=>{const button=$('#edit-dynamic-save');action(button,async()=>{const args=await editArgs();if(JSON.stringify(args)!==checkedEdit)throw Error('内容已变化，请重新检查修改。');resetEdit();try{await command([...args,'--go'],$('#edit-dynamic-output'));}finally{checkedEdit=null;}}).finally(()=>{button.disabled=true;});};
 window.pet.events.on('host:context-changed',()=>{
   const epoch=++panelEpoch;dirty=false;settings=undefined;$('#settings-form').dataset.ready='false';loginId=null;$('#manual-cookie').value='';clearTimeout(loginTimer);dynamicImage=null;resetDynamic();editFile=null;resetEdit();
+  watchTaskId=null;watchLoadedId=null;watchSubmitting=false;watchCanStart=false;watchRunning=false;watchAccountKey=null;watchButton();$('#watch-cancel').hidden=true;$('#watch-fallback').hidden=true;$('#watch-result').textContent='';$('#watch-status').textContent='正在切换宠物…';
+  $('#watch-target').value='';$('#watch-question').value='';
   for(const selector of ['#dynamic-text','#edit-dynamic-id','#edit-dynamic-text','#target','#command-args'])$(selector).value='';$('#chosen-image').textContent='纯文字动态';$('#chosen-text').textContent='也可直接填写新正文';
   $('main').inert=true;$('#account-state').textContent='正在切换宠物…';$('#qr').hidden=true;
   for(const selector of ['#task-list','#draft-list','#diary-output','#operation-output','#operation-images','#logs'])$(selector).replaceChildren();
