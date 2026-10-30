@@ -96,3 +96,7 @@ CI 候选、带标签的测试 Release 和桌宠插件市场登记的顺序及�
 ## 来源
 
 原始提交：`Alterssss/dsh-bili-whale@8b0009f8ce2ebdc421afcb2e727b19ac18912ec6`。原作者 MIT 许可和第三方说明见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)。
+
+## 定时浏览结果分享
+
+插件 0.1.1 配合支持 `pet.ai.share` 的宿主，可把定时浏览的发现送到宠物气泡、聊天记录与驿站；点击驿站定位同一条消息。前台聊天不会被后台气泡覆盖。这与 B 站评论/私信开关独立，不增加站外发送。旧宿主会显示结果暂未送达；安装版本和发布状态以 Release 与市场条目为准。详见 [主动分享说明](docs/proactive-sharing.md)。

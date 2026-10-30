@@ -76,6 +76,7 @@ async function refreshState(){
   for(const task of [...value.tasks].reverse()){
     const row=document.createElement('div');row.className='task';
     row.append(textNode('strong',`${kindText[task.kind]||task.kind} · ${statusText[task.status]||task.status}`),textNode('p',new Date(task.at).toLocaleString(),'time'));
+    if(task.kind==='night'&&task.status==='completed')row.append(textNode('p',task.delivery==='shared'?'已分享到桌宠聊天和驿站。':'结果已生成，但暂未送达聊天和驿站。'));
     if(task.error)row.append(textNode('p',task.error));
     if(task.text){const details=document.createElement('details'),output=textNode('pre',task.text);details.append(textNode('summary','查看完整结果'),output);details.addEventListener('toggle',()=>{if(details.open&&!details.dataset.loaded)fullTask(task.id).then(value=>{if(value){output.textContent=value.text;details.dataset.loaded='true';}}).catch(error=>notice(error.message,true));});row.append(details);}
     if(['queued','running'].includes(task.status)){const button=textNode('button','取消','quiet');button.onclick=()=>action(button,async()=>{await call('cancelTask',{id:task.id});await refreshState();});row.append(button);}

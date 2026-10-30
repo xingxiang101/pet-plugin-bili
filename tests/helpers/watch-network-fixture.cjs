@@ -6,6 +6,9 @@ const base=process.env.PET_BILI_E2E_FIXTURE_BASE;
 if(base){
   const target=new URL(base),profile=process.env.PET_USERDATA_DIR||'';
   if(process.env.PET_E2E_TEST!=='1'||target.hostname!=='127.0.0.1'||target.protocol!=='http:'||!path.basename(profile).startsWith('desktop-pet-bili-'))throw Error('Watch network fixture requires an isolated Bili E2E profile');
+  // Seed only the test plugin process so the real 20s planner tick is repeatable.
+  // Production code and wall clock stay unchanged.
+  if(process.type==='utility')Math.random=()=>0;
   const nativeFetch=globalThis.fetch;
   if(typeof nativeFetch!=='function')throw Error('Watch network fixture requires native Node fetch');
   const audit=row=>fs.appendFileSync(process.env.PET_BILI_E2E_NETWORK_AUDIT,JSON.stringify({pid:process.pid,type:process.type||'node',...row})+'\n');
