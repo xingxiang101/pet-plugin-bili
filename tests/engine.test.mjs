@@ -12,7 +12,7 @@ function setup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-bili-engine-'))
   const storage = new Map(), secrets = new Map()
   const pet = { storage: { get: k => storage.get(k), set: (k,v) => storage.set(k,v) }, secrets: { get: k => secrets.get(k) } }
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
   return { dir, pet, storage, secrets }
 }
 
@@ -251,7 +251,7 @@ test('dispose while awaiting secret retrieval cannot launch a late background pr
 })
 
 test('cancelling a real CLI also terminates its FFmpeg descendant process', async t => {
-  const b = setup(t), { pidFile, env }=blockingSubprocessFixture(b.dir)
+  const b = setup(t), { pidFile, workerPidFile, env }=blockingSubprocessFixture(b.dir)
   const old={FFMPEG:process.env.FFMPEG,NODE_OPTIONS:process.env.NODE_OPTIONS}
   Object.assign(process.env,env)
   t.after(()=>{for(const [key,value]of Object.entries(old)){if(value===undefined)delete process.env[key];else process.env[key]=value}})
@@ -261,11 +261,14 @@ test('cancelling a real CLI also terminates its FFmpeg descendant process', asyn
   while(!fs.existsSync(pidFile)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20))
   assert.ok(fs.existsSync(pidFile),'dependency checker must start FFmpeg')
   const pid=Number(fs.readFileSync(pidFile,'utf8').trim())
+  const workerPid=Number(fs.readFileSync(workerPidFile,'utf8').trim())
   assert.doesNotThrow(()=>process.kill(pid,0))
   assert.equal(engine.cancel(id),true)
-  let stopped=false
-  while(Date.now()<deadline){try{process.kill(pid,0)}catch{stopped=true;break}await new Promise(resolve=>setTimeout(resolve,20))}
-  assert.equal(stopped,true,'FFmpeg descendant must exit after plugin job cancellation')
+  for(const [name,target]of [['FFmpeg descendant',pid],['CLI worker',workerPid]]){
+    let stopped=false
+    while(Date.now()<deadline){try{process.kill(target,0)}catch{stopped=true;break}await new Promise(resolve=>setTimeout(resolve,20))}
+    assert.equal(stopped,true,name+' must exit after plugin job cancellation')
+  }
 })
 
 test('real local HTTP video download runs FFmpeg and returns bounded extracted frame bytes', async t => {
@@ -307,6 +310,12 @@ test('real local HTTP video download runs FFmpeg and returns bounded extracted f
   // fetch an undeclared segment behind the JavaScript network policy.
   fs.writeFileSync(video,`#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:4,\nhttp://127.0.0.1:${server.address().port}/forbidden.ts\n#EXT-X-ENDLIST\n`)
   process.env.FFMPEG=generator
+  // Newer FFmpeg builds refuse HLS auto-detection for a downloaded .mp4 name
+  // before reaching the protocol guard. Select the known malicious fixture's
+  // demuxer in this test only, retaining every production whitelist argument.
+  const forceHls=path.join(b.dir,'force-hls-fixture.mjs')
+  fs.writeFileSync(forceHls,`import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';const native=cp.spawnSync;cp.spawnSync=(file,args,options)=>{if(file===${JSON.stringify(generator)}&&args.includes('-i')){const i=args.indexOf('-i');args=[...args.slice(0,i),'-f','hls',...args.slice(i)]}return native(file,args,options)};syncBuiltinESMExports();`)
+  process.env.NODE_OPTIONS+=' --import='+pathToFileURL(forceHls).href
   const denied=await engine.run(['watch-video','BV1234567890','3x3'])
   assert.notEqual(denied.exitCode,0,denied.text)
   assert.match(denied.text,/not on whitelist/)
@@ -349,7 +358,7 @@ test('bundled FFmpeg digest is verified before restoring only its own executable
 
 test('an abrupt engine-parent crash stops a worker blocked in FFmpeg', async t => {
   const {fork}=await import('node:child_process')
-  const b=setup(t), {pidFile,env}=blockingSubprocessFixture(b.dir), fixture=path.join(b.dir,'parent.mjs')
+  const b=setup(t), {pidFile,workerPidFile,env}=blockingSubprocessFixture(b.dir), fixture=path.join(b.dir,'parent.mjs')
   const engineUrl=new URL('../src/engine.mjs',import.meta.url).href
   fs.writeFileSync(fixture,`import {createEngine} from ${JSON.stringify(engineUrl)};const m=new Map();const engine=await createEngine({pet:{storage:{get:k=>m.get(k),set:(k,v)=>m.set(k,v)},secrets:{get:()=>null}},dataDir:process.argv[2]});await engine.run(['deps','--json']);`)
   const parent=fork(fixture,[b.dir],{env:{...process.env,...env},stdio:'ignore',windowsHide:true})
@@ -358,10 +367,13 @@ test('an abrupt engine-parent crash stops a worker blocked in FFmpeg', async t =
   while(!fs.existsSync(pidFile)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20))
   assert.ok(fs.existsSync(pidFile),'FFmpeg must be running before simulating the crash')
   const pid=Number(fs.readFileSync(pidFile,'utf8').trim())
+  const workerPid=Number(fs.readFileSync(workerPidFile,'utf8').trim())
   parent.kill('SIGKILL')
-  let stopped=false
-  while(Date.now()<deadline){try{process.kill(pid,0)}catch{stopped=true;break}await new Promise(resolve=>setTimeout(resolve,25))}
-  assert.equal(stopped,true,'watchdog must kill FFmpeg after its engine parent disappears')
+  for(const [name,target]of [['FFmpeg descendant',pid],['CLI worker',workerPid]]){
+    let stopped=false
+    while(Date.now()<deadline){try{process.kill(target,0)}catch{stopped=true;break}await new Promise(resolve=>setTimeout(resolve,25))}
+    assert.equal(stopped,true,'watchdog must kill '+name+' after its engine parent disappears')
+  }
 })
 
 test('cancellation while image bytes are loading releases the external signal listener', async t => {

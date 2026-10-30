@@ -172,6 +172,7 @@ jobs:
       - name: Install locked test dependencies
         run: npm ci
       - name: Verify the exact ZIP and prepare native tests
+        id: prepare
         run: |
           set -euo pipefail
           python scripts/verify-release.py --extract "$RUNNER_TEMP/bili-release" --install-test-binaries
@@ -179,9 +180,11 @@ jobs:
       - name: Run plugin tests on native operating system
         run: npm test
       - name: Run installed release download, extraction and chat tests
+        id: native
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
         run: npm run test:release:native
       - name: Preserve native verification evidence
-        if: always()
+        if: ${{ !cancelled() && steps.native.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bili-native-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}

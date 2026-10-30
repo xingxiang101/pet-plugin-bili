@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const preload = path.resolve(toolRoot, '../src/worker-preload.mjs')
@@ -15,7 +15,8 @@ export function execFileSync(file, args = [], options = {}) {
     const runtime = globalThis[Symbol.for('pet.bili.runtime')]
     const candidate = typeof args[0] === 'string' ? path.resolve(args[0]) : ''
     const nested = runtime && candidate.startsWith(toolRoot + path.sep) && candidate.endsWith('.mjs')
-    const childArgs = nested ? ['--import', preload, ...args] : args
+    // --import follows ESM URL resolution; a Windows drive path is a scheme.
+    const childArgs = nested ? ['--import', pathToFileURL(preload).href, ...args] : args
     const result = spawnSync(file, childArgs, { ...options, timeout: options.timeout ?? 120000,
       input: nested ? JSON.stringify(runtime) : undefined,
       windowsHide: true, stdio: [nested ? 'pipe' : 'ignore', ...fds] })
