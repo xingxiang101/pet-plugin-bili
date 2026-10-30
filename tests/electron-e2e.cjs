@@ -21,6 +21,8 @@ assert.equal(manifest.id,'bili');assert.ok(Array.isArray(manifest.permissions));
 const permissions=[...new Set([...manifest.permissions,...manifest.services.map(name=>'service:'+name)])];
 const packagePath='/releases/bili-'+encodeURIComponent(manifest.version)+'.zip';
 const WATCH='BV1234567890',BARE='BV4234567890',CANCEL_MEDIA='BV2234567890',CANCEL_AI='BV3234567890';
+const NIGHT_REPLY='定时浏览测试：生态关系值得继续观察。https://www.bilibili.com/video/'+WATCH+'/ SCHEDULED_SHARE_END';
+let nightRequests=0;
 const QUESTION='WATCH_MAIN：画面是什么样的？请明确区分抽帧观察与声音。';
 const REPLY='我看到了视频抽帧中的彩色测试图。这里只能确认画面采样，没有音轨或字幕依据。\n'+('这次观察来自实际下载的视频截图，彩色方格与变化的图案清晰可见。'.repeat(35))+'\nWATCH_REPLY_COMPLETE_END';
 const CHAT_MAIN='帮我看看 https://www.bilibili.com/video/'+WATCH+'/ 。'+QUESTION;
@@ -60,6 +62,7 @@ try{
     if(url.pathname==='/v1/chat/completions'){
       const body=JSON.parse(raw),prompt=JSON.stringify(body.messages),images=body.messages.flatMap(m=>Array.isArray(m.content)?m.content:[]).filter(part=>part.type==='image_url').map(part=>part.image_url.url);
       const toolNames=(body.tools||[]).map(tool=>tool.function?.name);
+      if(prompt.includes('按作息自主浏览')){nightRequests++;return finishModel(res,NIGHT_REPLY);}
       if(!images.length){
         const lastUser=body.messages.findLastIndex(message=>message.role==='user'),turn=body.messages.slice(lastUser+1),text=JSON.stringify(body.messages[lastUser]?.content||'');
         const result=turn.filter(message=>message.role==='tool').at(-1);
@@ -139,7 +142,7 @@ try{
     check(submittedMessages.every(text=>history.messages.filter(item=>item.role==='user'&&item.text===text).length===1),label+' persists each actual owner input exactly once');
     check(!history.messages.some(item=>item.role==='pet'&&(item.text.includes('WATCH_CANCEL_AI')||item.text.includes('CANCELLED_SHOULD_NOT_DELIVER'))),label+' contains no cancelled result');
     fs.writeFileSync(path.join(artifact,label+'-history.json'),JSON.stringify(history,null,2));
-    await H.captureScreenshot(chat,path.join(artifact,label+'-chat.png'));
+    const shot=await H.cdp(chat,'Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(artifact,label+'-chat.png'),Buffer.from(shot.data,'base64'));
   };
   const binary=path.join(target,'bin',process.platform+'-'+process.arch,process.platform==='win32'?'ffmpeg.exe':'ffmpeg');
   check(fs.existsSync(binary),'release ZIP contains the platform FFmpeg binary');
@@ -256,10 +259,33 @@ try{
   await H.evalIn(app.pet,"window.petAPI.e2eConfigPatch({character:'qiqi'})");
   await wait(()=>H.evalIn(panel,"pet.services.invoke('bili-control','settings',[{}]).then(value=>value.owner.mid==='123456789')").catch(()=>false),'restored prior pet scoped state');
   check(true,'returning to previous pet restores its own configuration');
+  // Exercise the production 20s timer and planner, without manually enqueuing a task.
+  // The model response above is a lifecycle fixture; live Bilibili content quality
+  // is outside this deterministic scheduler regression.
+  const end=new Date(Date.now()+120000),hhmm=d=>String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  const schedule={enabled:true,night:{windows:[{start:hhmm(new Date()),end:hhmm(end),wakes:1}],skipChance:0},share:{enabled:false},diary:{push:false},listen:{dm:false,comment:false,live:false}};
+  await H.evalIn(panel,`pet.services.invoke('bili-control','saveSettings',[${JSON.stringify(schedule)}])`);
+  let scheduled;
+  for(let attempt=0;attempt<180;attempt++){
+    scheduled=(await state()).tasks.find(t=>t.kind==='night'&&t.status==='completed');
+    if(scheduled)break;await H.sleep(1000);
+  }
+  check(scheduled?.delivery==='shared','production timer schedules night work and shares completed result');
+  check(nightRequests===1,'scheduled share reuses exactly one final model response');
+  await H.evalIn(panel,"pet.services.invoke('bili-control','saveSettings',[{enabled:false}])");
+  await openChat();
+  await wait(()=>H.evalIn(chat,`[...document.querySelectorAll('.cp-bubble-pet')].filter(n=>n.textContent===${JSON.stringify(NIGHT_REPLY)}).length===1`),'scheduled result in chat');
+  const scheduledHistory=await H.evalIn(chat,'chatAPI.getChatHistory({page:0,perPage:100})');
+  const scheduledMessage=scheduledHistory.messages.find(m=>m.text===NIGHT_REPLY);
+  const notices=JSON.parse(fs.readFileSync(path.join(profile,'activity-hub.json'),'utf8')).records.filter(r=>r.chatMessageId===scheduledMessage.id);
+  check(notices.length===1&&notices[0].readAt===null,'Bili scheduled result has exactly one unread hub reference');
+  report.scheduled={task:scheduled,message:scheduledMessage,notice:notices[0],modelFixture:true};
   await H.stopOwned(child);fs.writeFileSync(path.join(artifact,'electron-first.log'),child.log);child=null;
   app=await boot();panel=await open(app.settings);
   check(await H.evalIn(panel,"pet.services.invoke('bili-control','settings',[{}]).then(value=>value.owner.mid==='123456789')"),'settings survive a fresh Electron process');
   await openChat();await verifyChat('restarted-watch');
+  check(nightRequests===1,'restart never replays scheduled work');
+  check((await H.evalIn(chat,'chatAPI.getChatHistory({page:0,perPage:100})')).messages.filter(m=>m.text===NIGHT_REPLY).length===1,'scheduled reply persists exactly once after restart');
   check(modelRequests.length===3,'a fresh Electron process reads the saved reply without replaying media or AI');
   const removed=await H.evalIn(app.settings,"settings.pluginsRemove('bili')");
   check(removed.ok,'removing an external plugin succeeds');
