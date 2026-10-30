@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import zipfile
@@ -75,11 +76,28 @@ with zipfile.ZipFile(package) as archive:
         if platform_id == 'win32-x64':
             required = {'ZLIB-LICENSE', 'zlib-source.tar.xz', 'dependencies.json', 'build-toolchain.txt',
                         'licenses/gcc-runtime/COPYING3', 'licenses/gcc-runtime/COPYING.RUNTIME',
-                        'licenses/mingw-runtime/COPYING'}
+                        'licenses/mingw-runtime/COPYING', 'licenses/winpthreads/COPYING'}
             if not {prefix + name for name in required}.issubset(names):
                 raise SystemExit('Windows static dependency licenses/source are missing')
             if hashlib.sha256(archive.read(prefix + 'zlib-source.tar.xz')).hexdigest() != ZLIB_SHA:
                 raise SystemExit('Windows zlib source checksum mismatch')
+            dependency = next((item for item in source.get('staticDependencies', []) if item.get('name') == 'winpthreads'), None)
+            if not dependency or dependency.get('license') != 'MIT AND BSD-3-Clause' or dependency.get('licenseFile') != 'licenses/winpthreads/COPYING':
+                raise SystemExit('Windows winpthreads dependency/license declaration is missing')
+            license_bytes = archive.read(prefix + dependency['licenseFile'])
+            if (hashlib.sha256(license_bytes).hexdigest() != dependency.get('licenseSha256') or
+                    b'Permission is hereby granted' not in license_bytes or b'Lockless Inc.' not in license_bytes):
+                raise SystemExit('Windows winpthreads MIT/BSD copyright or license digest mismatch')
+            packages = dict(line.split(maxsplit=1) for line in archive.read(prefix + 'build-toolchain.txt').decode().splitlines())
+            version = packages.get('mingw-w64-ucrt-x86_64-winpthreads', '')
+            revision = re.search(r'\.g([0-9a-f]{7,40})(?:-|$)', version)
+            release = re.fullmatch(r'(\d+\.\d+\.\d+)-\d+', version)
+            source_ref = revision.group(1) if revision else ('v' + release.group(1) if release else None)
+            if (not source_ref or dependency.get('version') != version or
+                    dependency.get('packageName') != 'mingw-w64-ucrt-x86_64-winpthreads' or
+                    dependency.get('sourceRef') != source_ref or
+                    dependency.get('sourceUrl') != 'https://github.com/mingw-w64/mingw-w64/tree/' + source_ref + '/mingw-w64-libraries/winpthreads'):
+                raise SystemExit('Windows winpthreads source differs from the installed toolchain package')
     if args.extract:
         destination = args.extract.resolve()
         if destination.exists():

@@ -41,7 +41,7 @@ PY
     (cd "$zlib_build" && CHOST=x86_64-w64-mingw32 CC=gcc ./configure --static --prefix="$zlib_prefix" && make -j4 && make install) > "$output_dir/zlib-build.log" 2>&1
     cp "$zlib_build/LICENSE" "$output_dir/ZLIB-LICENSE"
     cp "$zlib_archive" "$output_dir/zlib-source.tar.xz"
-    mkdir -p "$output_dir/licenses/gcc-runtime" "$output_dir/licenses/mingw-runtime"
+    mkdir -p "$output_dir/licenses/gcc-runtime" "$output_dir/licenses/mingw-runtime" "$output_dir/licenses/winpthreads"
     gcc_license_found=false
     for license_dir in libgcc gcc-libs gcc; do
       if test -f "$MINGW_PREFIX/share/licenses/$license_dir/COPYING.RUNTIME"; then
@@ -53,6 +53,8 @@ PY
     done
     test "$gcc_license_found" = true
     cp "$MINGW_PREFIX/share/licenses/crt/"* "$output_dir/licenses/mingw-runtime/"
+    # MinGW time functions can link winpthreads even with FFmpeg pthreads off.
+    cp "$MINGW_PREFIX/share/licenses/winpthreads/COPYING" "$output_dir/licenses/winpthreads/COPYING"
     pacman -Q > "$output_dir/build-toolchain.txt"
     set -- --target-os=mingw32 --arch=x86_64 --cc=gcc \
       --extra-cflags="-I$zlib_prefix/include" \
@@ -99,6 +101,18 @@ if platform_id == 'win32-x64':
     if not dlls or any(name.lower() not in allowed and not re.fullmatch(r'api-ms-win-crt-[a-z0-9-]+\.dll', name, re.I) for name in dlls):
         raise SystemExit('Windows FFmpeg has a non-system DLL dependency: ' + str(dlls))
     (output / 'dependencies.json').write_text(json.dumps({'platform': platform_id, 'systemDlls': dlls}, indent=2) + '\n')
+    packages = dict(line.split(maxsplit=1) for line in (output / 'build-toolchain.txt').read_text().splitlines())
+    pthread_package = 'mingw-w64-ucrt-x86_64-winpthreads'
+    pthread_version = packages[pthread_package]
+    revision = re.search(r'\.g([0-9a-f]{7,40})(?:-|$)', pthread_version)
+    release = re.fullmatch(r'(\d+\.\d+\.\d+)-\d+', pthread_version)
+    if not revision and not release:
+        raise SystemExit('Cannot resolve winpthreads source from the installed package version: ' + pthread_version)
+    pthread_ref = revision.group(1) if revision else 'v' + release.group(1)
+    pthread_license = 'licenses/winpthreads/COPYING'
+    pthread_text = (output / pthread_license).read_text()
+    if 'Permission is hereby granted' not in pthread_text or 'Lockless Inc.' not in pthread_text:
+        raise SystemExit('winpthreads COPYING must retain both MIT and BSD copyright notices')
     dependencies = [{'name': 'zlib', 'version': '1.3.2', 'license': 'Zlib', 'licenseFile': 'ZLIB-LICENSE',
         'sourceUrl': 'https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz',
         'sourceArchive': 'zlib-source.tar.xz',
@@ -107,7 +121,13 @@ if platform_id == 'win32-x64':
          'license': 'GPL-3.0-or-later WITH GCC-exception-3.1', 'licenseFile': 'licenses/gcc-runtime/COPYING.RUNTIME',
          'sourceUrl': 'https://gcc.gnu.org/releases.html', 'packagesFile': 'build-toolchain.txt'},
         {'name': 'MinGW-w64 runtime', 'licenseFile': 'licenses/mingw-runtime/COPYING',
-         'sourceUrl': 'https://www.mingw-w64.org/', 'packagesFile': 'build-toolchain.txt'}]
+         'sourceUrl': 'https://www.mingw-w64.org/', 'packagesFile': 'build-toolchain.txt'},
+        {'name': 'winpthreads', 'version': pthread_version, 'packageName': pthread_package,
+         'license': 'MIT AND BSD-3-Clause', 'licenseFile': pthread_license,
+         'licenseSha256': hashlib.sha256((output / pthread_license).read_bytes()).hexdigest(),
+         'sourceRef': pthread_ref,
+         'sourceUrl': 'https://github.com/mingw-w64/mingw-w64/tree/' + pthread_ref + '/mingw-w64-libraries/winpthreads',
+         'packagesFile': 'build-toolchain.txt'}]
 else:
     if subprocess.check_output(['lipo', '-archs', str(output / binary_name)], text=True).strip() != 'arm64':
         raise SystemExit('macOS binary must contain only arm64')

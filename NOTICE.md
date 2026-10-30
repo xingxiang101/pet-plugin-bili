@@ -14,6 +14,9 @@
 | **zlib 1.3.2** | Windows FFmpeg 的静态压缩依赖 | Zlib；固定官方源码来自 https://github.com/madler/zlib/releases/tag/v1.3.2，许可证与对应源码分别在 `bin/win32-x64/ZLIB-LICENSE` 和 `zlib-source.tar.xz`，摘要见同目录 `SOURCE.json` |
 | **GCC runtime** | Windows FFmpeg 的编译器运行库 | GPL-3.0-or-later WITH GCC-exception-3.1；随包保留 `bin/win32-x64/licenses/gcc-runtime/COPYING3` 和 `COPYING.RUNTIME`。实际 GCC 与 MSYS2 包版本见 `SOURCE.json` 和 `build-toolchain.txt`；来源 https://gcc.gnu.org/ |
 | **MinGW-w64 runtime** | Windows FFmpeg 的 Windows 运行库适配 | 按组件保留上游许可；完整许可文件在 `bin/win32-x64/licenses/mingw-runtime`，MSYS2 包版本见 `build-toolchain.txt`；来源 https://www.mingw-w64.org/ |
+| **winpthreads** | Windows FFmpeg 静态链接的时间函数等运行库代码 | MIT AND BSD-3-Clause；完整许可与版权声明在 `bin/win32-x64/licenses/winpthreads/COPYING`，包括 mingw-w64 project 和 Lockless Inc. 声明。实际包版本、对应固定源码引用及许可证摘要见 `SOURCE.json` |
+
+winpthreads 的 `time.c` 另保留版权声明：Copyright (c) 2026 mingw-w64 project。该文件适用 MIT 许可，许可正文与免责声明见随包 `licenses/winpthreads/COPYING` 的 MIT 部分。
 
 ## 免责
 

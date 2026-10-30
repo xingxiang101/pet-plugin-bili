@@ -65,15 +65,21 @@ FFmpeg 只读取已下载的本地文件，在每个 `-i` 前设置 `-protocol_w
 
 `scripts/build-ffmpeg.sh` 从固定官方源码编译，关闭 GPL、nonfree 和自动依赖探测。开发依赖 `ffmpeg-static` 仅用于测试素材，不进入发布 ZIP，其本机下载产物不能替代随包构建。
 
-Windows 构建静态链接固定版本的 zlib，并记录 MSYS2 UCRT64 工具链版本。`bin/win32-x64` 同时包含 `ZLIB-LICENSE`、zlib 对应源码归档，以及 `licenses/gcc-runtime` 中的 GCC Runtime Library Exception 和 `licenses/mingw-runtime` 中的 MinGW-w64 运行库许可；各组件来源、摘要和许可证位置写入 `SOURCE.json`。构建检查导入 DLL，仅允许 Windows 系统库，避免要求用户另装 MSYS2 或编译器运行库。
+Windows 构建静态链接固定版本的 zlib，并记录 MSYS2 UCRT64 工具链版本。`bin/win32-x64` 同时包含 `ZLIB-LICENSE`、zlib 对应源码归档，以及 `licenses/gcc-runtime` 中的 GCC Runtime Library Exception、`licenses/mingw-runtime` 中的 MinGW-w64 运行库许可和 `licenses/winpthreads/COPYING` 中的 MIT/BSD 许可。关闭 FFmpeg 的 pthreads 线程后端仍可能带入 winpthreads 的时间函数，因此它也列为静态依赖。各组件来源、摘要和许可证位置写入 `SOURCE.json`；winpthreads 的源码引用由实际安装的 MSYS2 包版本解析。构建检查导入 DLL，仅允许 Windows 系统库，避免要求用户另装 MSYS2 或编译器运行库。
 
-构建时传入已解压源码、输出目录和固定官方源码归档三个绝对路径：
+macOS 构建时传入已解压源码、输出目录和固定官方源码归档三个绝对路径：
 
 ```sh
 sh scripts/build-ffmpeg.sh /absolute/FFmpeg-n6.1.1 /absolute/pet-plugin-bili/bin/darwin-arm64 /absolute/ffmpeg-n6.1.1.tar.gz
 ```
 
-脚本校验源码归档 SHA-256，再生成二进制、完整源码归档、许可证与 SOURCE.json；不在用户运行插件时执行。Windows 构建在 Windows CI 的 MSYS2 环境运行同一脚本，输出到 `bin/win32-x64`。使用正式产物前，CI 分别在 macOS 和 Windows 上调用实际 ZIP 内的二进制验收。
+Windows 构建在 MSYS2 UCRT64 环境运行同一脚本，额外传入第 4 个参数，即固定官方 zlib 1.3.2 源码归档。以下路径使用 MSYS2 格式：
+
+```sh
+sh scripts/build-ffmpeg.sh /absolute/FFmpeg-n6.1.1 /absolute/pet-plugin-bili/bin/win32-x64 /absolute/ffmpeg-n6.1.1.tar.gz /absolute/zlib-1.3.2.tar.xz
+```
+
+脚本校验源码归档 SHA-256，再生成二进制、完整源码归档、许可证与 SOURCE.json；不在用户运行插件时执行。使用正式产物前，CI 分别在 macOS 和 Windows 上调用实际 ZIP 内的二进制验收，并检查 Windows 静态依赖的声明和许可证。
 
 ## 开发和验证
 

@@ -35,7 +35,15 @@ try {
   const meta = JSON.parse(fs.readFileSync(path.join(path.dirname(binary), 'SOURCE.json'), 'utf8'))
   report.binarySha256 = crypto.createHash('sha256').update(binaryBytes).digest('hex')
   assert.equal(report.binarySha256, meta.sha256)
-  if (process.platform === 'win32') check(binaryBytes.subarray(0, 2).toString() === 'MZ', 'Windows executes a PE binary')
+  if (process.platform === 'win32') {
+    check(binaryBytes.subarray(0, 2).toString() === 'MZ', 'Windows executes a PE binary')
+    const dependency = meta.staticDependencies.find(item => item.name === 'winpthreads')
+    assert.equal(dependency?.licenseFile, 'licenses/winpthreads/COPYING')
+    assert.equal(dependency.license, 'MIT AND BSD-3-Clause')
+    const license = fs.readFileSync(path.join(path.dirname(binary), dependency.licenseFile))
+    assert.equal(crypto.createHash('sha256').update(license).digest('hex'), dependency.licenseSha256)
+    check(license.includes('Permission is hereby granted') && license.includes('Lockless Inc.'), 'the installed Windows binary includes its winpthreads MIT and BSD licenses')
+  }
   const protocols = execFileSync(binary, ['-hide_banner', '-protocols'], { encoding: 'utf8', windowsHide: true })
   const names = protocols.split(/\r?\n/).map(line => line.trim()).filter(line => /^[a-z0-9_]+$/.test(line))
   check(names.length > 0 && names.every(name => ['file', 'pipe'].includes(name)), 'packaged FFmpeg exposes only file and pipe protocols')

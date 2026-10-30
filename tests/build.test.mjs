@@ -92,6 +92,9 @@ test('static FFmpeg dependencies must retain in-package licenses and matching so
   const dependency={name:'zlib',licenseFile:'zlib-LICENSE',sourceArchive:'zlib-source.tar.gz',sourceSha256:'0'.repeat(64)}
   const rejected=run(dependency);assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/dependency source digest/)
   dependency.sourceSha256=createHash('sha256').update(fs.readFileSync(path.join(dir,'zlib-source.tar.gz'))).digest('hex')
+  dependency.licenseSha256='0'.repeat(64)
+  const badLicense=run(dependency);assert.notEqual(badLicense.status,0);assert.match(badLicense.stderr,/dependency license digest/)
+  dependency.licenseSha256=createHash('sha256').update(fs.readFileSync(path.join(dir,'zlib-LICENSE'))).digest('hex')
   const accepted=run(dependency);assert.equal(accepted.status,0,accepted.stderr)
 })
 test('builder includes the production library graph and licenses without unused CLI dynamic loaders',t=>{

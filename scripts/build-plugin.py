@@ -70,7 +70,9 @@ for binary in ffmpeg_files:
         license_name = dependency.get('licenseFile', '')
         if not license_name:
             parser.error('Static FFmpeg dependencies must include their license')
-        checked_path(binary.parent / license_name, boundary=binary.parent)
+        license_file = checked_path(binary.parent / license_name, boundary=binary.parent)
+        if dependency.get('licenseSha256') and hashlib.sha256(license_file.read_bytes()).hexdigest() != dependency['licenseSha256']:
+            parser.error('Static FFmpeg dependency license digest differs from SOURCE.json')
         if dependency.get('sourceArchive'):
             source = checked_path(binary.parent / dependency['sourceArchive'], boundary=binary.parent)
             if hashlib.sha256(source.read_bytes()).hexdigest() != dependency.get('sourceSha256'):
