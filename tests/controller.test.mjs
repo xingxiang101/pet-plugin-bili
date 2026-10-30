@@ -12,14 +12,14 @@ function assertStrictJson(value,path='$'){
 }
 const until=async predicate=>{for(let i=0;i<600;i++){if(await predicate())return;await new Promise(r=>setTimeout(r,5))}throw Error('timed out')}
 async function fixture(options={}){
-  const data=options.data||new Map(),secrets=new Map(),files=new Map(),jobs=new Map(),tools=new Map(),calls=[],prompts=[],deliveries=[]
+  const data=options.data||new Map(),secrets=new Map(),files=new Map(),jobs=new Map(),tools=new Map(),calls=[],prompts=[],deliveries=[],shares=[]
   let cfg=normalizeSettings(options.config||{}),authOptions,scope={scopeId:'scope-a',revision:1},starts=0
   if(options.logged!==false)secrets.set('bili.credentials.test',JSON.stringify({sessdata:'test-login-value-123456789',bili_jct:'a'.repeat(32),mid:'42',name:'pet-bili'}))
   const engine={dataDir:'/isolated',getConfig:async()=>cfg,setConfig:async value=>{cfg=copy(value)},readState:async p=>files.get(p),writeState:async(p,value)=>{files.set(p,copy(value))},accountChanged:()=>{calls.push(['accountChanged'])},dispose:()=>{calls.push(['dispose'])},cancel:id=>{calls.push(['cancel',id]);return true},start:async args=>{calls.push(args);const id='job-'+calls.length;jobs.set(id,{id,status:'completed',result:{text:'done',images:[],exitCode:0}});return id},get:id=>jobs.get(id),run:async args=>{calls.push(args);if(options.run)return options.run(args);return{text:args[0]==='dm-await'?JSON.stringify({hit:false}):args[0]==='inbox'?JSON.stringify({items:[]}):'done',images:[],exitCode:0}}}
-  const pet={storage:{get:async(k,fallback)=>data.has(k)?copy(data.get(k)):fallback,set:async(k,v)=>{data.set(k,copy(v))}},secrets:{get:async k=>secrets.get(k),set:async(k,v)=>{secrets.set(k,v)},delete:async k=>secrets.delete(k)},profile:{getScope:async()=>({...scope})},ai:{start:async(prompt,opts)=>{starts++;prompts.push({prompt,opts});return{id:'ai-'+starts,status:'running'}},get:async()=>options.pendingAI?{status:'running'}:{status:'completed',text:'完成真实任务'},cancel:async id=>{calls.push(['ai.cancel',id]);options.pendingAI=false;return true},deliver:async id=>{deliveries.push(id);return true}},tools:{register:spec=>tools.set(spec.name,{...spec,handler:(input,context={source:'host'})=>spec.handler(input,context)})},scheduler:{every:async()=> 'timer-1',cancel:async id=>{calls.push(['timer.cancel',id])}}}
+  const pet={storage:{get:async(k,fallback)=>data.has(k)?copy(data.get(k)):fallback,set:async(k,v)=>{data.set(k,copy(v))}},secrets:{get:async k=>secrets.get(k),set:async(k,v)=>{secrets.set(k,v)},delete:async k=>secrets.delete(k)},profile:{getScope:async()=>({...scope})},ai:{start:async(prompt,opts)=>{starts++;prompts.push({prompt,opts});return{id:'ai-'+starts,status:'running'}},get:async()=>options.pendingAI?{status:'running'}:{status:'completed',text:'完成真实任务'},cancel:async id=>{calls.push(['ai.cancel',id]);options.pendingAI=false;return true},share:async id=>{shares.push(id);return true},deliver:async id=>{deliveries.push(id);return true}},tools:{register:spec=>tools.set(spec.name,{...spec,handler:(input,context={source:'host'})=>spec.handler(input,context)})},scheduler:{every:async()=> 'timer-1',cancel:async id=>{calls.push(['timer.cancel',id])}}}
   const controller=await createController({pet,engine,scopeKey:'test',scopeId:'scope-a',scopeRevision:1,now:options.now||Date.now,random:()=>0,verify:options.verify||(async()=>({mid:'42',name:'pet-bili'})),authFactory:opts=>{authOptions=opts;return{start:async()=>({id:'qr',status:'waiting',image:'data:image/png;base64,AA=='}),poll:async()=>({status:'waiting'}),cancel:()=>({status:'cancelled'}),dispose:()=>{}}}})
   controller.registerTools()
-  return{controller,engine,pet,data,secrets,files,jobs,tools,calls,prompts,deliveries,get starts(){return starts},setScope:value=>{scope=value},get auth(){return authOptions},get cfg(){return cfg}}
+  return{controller,engine,pet,data,secrets,files,jobs,tools,calls,prompts,deliveries,shares,get starts(){return starts},setScope:value=>{scope=value},get auth(){return authOptions},get cfg(){return cfg}}
 }
 test('settings retain same-pet identity and bound schedule while rejecting invalid input',()=>{
   const value=normalizeSettings({persona:{name:'independent whale'},diary:{enabled:false},night:{maxVideos:999},listen:{commentIntervalSec:1}})
@@ -263,7 +263,7 @@ test('one-time browsing while autonomy is disabled can read and draft but cannot
  const f=await fixture({pendingAI:true}),command=f.tools.get('bili_command').handler
  await f.controller.api.wake({},meta);await until(()=>f.starts===1)
  const bg={source:'plugin-task',aiTaskId:'ai-1'}
- assert.equal(f.cfg.enabled,false);assert.match(f.prompts[0].prompt,/本次仅允许读取/);assert.match(f.prompts[0].prompt,/本轮不主动分享/)
+ assert.equal(f.cfg.enabled,false);assert.match(f.prompts[0].prompt,/本次仅允许读取/);assert.match(f.prompts[0].prompt,/本轮不向 B 站发送评论或私信分享/);assert.match(f.prompts[0].prompt,/仍须在最终回复中告诉主人本次发现/)
  for(const args of [
   ['comment','--oid','1','--share','--go'],['dm','--msg','正文','--go'],['fav','BV1234567890','--go'],
   ['danmaku','send','--room','1','--go'],['notify','正文'],['ai-share','sample','BV1234567890'],
@@ -559,4 +559,27 @@ test('cancel after media completes during grace interval never starts continuati
 })
 test('unknown host tools cannot trigger notification side effects without go flag',async()=>{
  const f=await fixture();await assert.rejects(f.tools.get('bili_command').handler({args:['notify','content']},{source:'host'}),/当前对话/);await f.controller.dispose()
+})
+
+test('scheduled tick shares one final result independently of external sharing and never repeats on next tick',async()=>{
+ const f=await fixture({config:{enabled:true,night:{windows:[{start:'00:00',end:'24:00',wakes:1}],skipChance:0},share:{enabled:false},listen:{dm:false,comment:false,live:false}}})
+ await f.controller.tick();await until(async()=>(await f.controller.getState()).tasks.some(t=>t.kind==='night'&&t.status==='completed'))
+ const task=(await f.controller.getState()).tasks.find(t=>t.kind==='night');assert.equal(task.delivery,'shared');assert.equal(f.shares.length,1);assert.equal(f.deliveries.length,0)
+ assert.match(f.prompts[0].prompt,/气泡、聊天记录和驿站/);assert.match(f.prompts[0].prompt,/实际读取过的视频链接/)
+ await f.controller.tick();assert.equal(f.shares.length,1);await f.controller.dispose()
+})
+
+test('skip, cancelled, failed and old-host tasks do not claim a proactive share',async()=>{
+ for(const mode of ['skip','cancel','failed','old-host']){
+  const f=await fixture({pendingAI:mode==='cancel'})
+  if(mode==='old-host')delete f.pet.ai.share
+  if(mode==='failed')f.pet.ai.get=async()=>({status:'failed',error:'provider error'})
+  const task=f.controller.enqueue(mode==='skip'?'skip':'night','{}')
+  if(mode==='cancel'){await until(()=>f.starts===1);await f.controller.api.cancelTask({id:task.id},meta)}
+  await until(async()=>['completed','failed','cancelled'].includes((await f.controller.getState()).tasks.find(t=>t.id===task.id).status))
+  const result=(await f.controller.getState()).tasks.find(t=>t.id===task.id)
+  assert.equal(f.shares.length,0,mode);assert.equal(f.deliveries.length,0,mode);assert.notEqual(result.delivery,'shared')
+  if(mode==='old-host'){assert.equal(result.delivery,'unavailable');assert.equal((await f.controller.getState()).proactiveSharingAvailable,false)}
+  await f.controller.dispose()
+ }
 })
