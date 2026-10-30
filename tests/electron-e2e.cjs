@@ -11,7 +11,15 @@ const ROOT=path.resolve(__dirname,'..'),ZIP=path.resolve(process.env.PET_BILI_PL
 const repro=process.argv.includes('--repro-chat-entry');
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-pet-bili-'));
 const artifact=path.join(ROOT,'artifacts',repro?'chat-entry-repro':'electron-e2e');fs.mkdirSync(artifact,{recursive:true});
-const manifest=JSON.parse(fs.readFileSync(path.join(ROOT,'manifest.json'),'utf8'));
+// The candidate may be a downloaded CI/Release ZIP. Derive the registry contract
+// from those exact bytes, never from the potentially different source checkout.
+const zipBytes=fs.readFileSync(ZIP),{readEntries,readEntryData}=require(path.join(HOST,'core/plugin-runtime/zip'));
+const manifestEntries=readEntries(zipBytes).filter(entry=>entry.name==='manifest.json');
+assert.equal(manifestEntries.length,1,'the release ZIP must contain exactly one root manifest');
+const manifest=JSON.parse(readEntryData(zipBytes,manifestEntries[0]).toString('utf8'));
+assert.equal(manifest.id,'bili');assert.ok(Array.isArray(manifest.permissions));assert.ok(Array.isArray(manifest.services));assert.ok(Array.isArray(manifest.platforms));
+const permissions=[...new Set([...manifest.permissions,...manifest.services.map(name=>'service:'+name)])];
+const packagePath='/releases/bili-'+encodeURIComponent(manifest.version)+'.zip';
 const WATCH='BV1234567890',BARE='BV4234567890',CANCEL_MEDIA='BV2234567890',CANCEL_AI='BV3234567890';
 const QUESTION='WATCH_MAIN：画面是什么样的？请明确区分抽帧观察与声音。';
 const REPLY='我看到了视频抽帧中的彩色测试图。这里只能确认画面采样，没有音轨或字幕依据。\n'+('这次观察来自实际下载的视频截图，彩色方格与变化的图案清晰可见。'.repeat(35))+'\nWATCH_REPLY_COMPLETE_END';
@@ -19,10 +27,11 @@ const CHAT_MAIN='帮我看看 https://www.bilibili.com/video/'+WATCH+'/ 。'+QUE
 const BARE_LINK='https://www.bilibili.com/video/'+BARE+'/';
 const BARE_REPLY='我看完了你发来的彩色测试视频，截图里能看到测试图案。BARE_VIDEO_REPLY_END';
 const networkAudit=path.join(profile,'watch-network.jsonl'),modelRequests=[],chatRequests=[],biliRequests=[],mediaRequests=[],submittedMessages=[];
+const registryRequests=[],packageDownloads=[];
 const chatTasks=new Map();let currentTaskId,missingWatchTool=false;
 const parseTool=value=>{for(let i=0;i<5;i++){if(typeof value==='string'){try{value=JSON.parse(value);continue;}catch{return null;}}if(value&&typeof value==='object'){if(value.taskId)return value;if(value.text){value=value.text;continue;}if(value.content){value=value.content;continue;}}return null;}return null;};
 let pendingMain,mediaCancelled=false,aiCancelled=false;
-let child,server,chat;const report={profile,host:HOST,zip:ZIP,sha256:crypto.createHash('sha256').update(fs.readFileSync(ZIP)).digest('hex'),checks:[]};
+let child,server,chat;const report={profile,host:HOST,zip:ZIP,sha256:crypto.createHash('sha256').update(zipBytes).digest('hex'),marketFixture:{kind:'isolated-local-registry',officialPublicationVerified:false},checks:[]};
 const check=(value,label)=>{assert.ok(value,label);report.checks.push(label);};
 const wait=async(check,label)=>{for(let i=0;i<400;i++){const value=await check();if(value)return value;await H.sleep(100);}throw Error('Timeout: '+label);};
 (async()=>{
@@ -37,6 +46,17 @@ try{
   server=http.createServer(async(req,res)=>{
     let raw='';for await(const chunk of req)raw+=chunk;
     const url=new URL(req.url,'http://127.0.0.1');
+    if(url.pathname==='/registry/plugins.json'){
+      registryRequests.push(url.pathname);res.setHeader('content-type','application/json');
+      return res.end(JSON.stringify({schemaVersion:1,plugins:[{id:manifest.id,name:manifest.name,description:manifest.description,author:'Local E2E fixture',repo:'https://github.com/xingxiang101/pet-plugin-bili',version:manifest.version,apiVersion:manifest.apiVersion,minHostVersion:manifest.minHostVersion,permissions,services:manifest.services,platforms:manifest.platforms,nodeAccess:true,sha256:report.sha256,download:'http://127.0.0.1:'+server.address().port+packagePath}]}));
+    }
+    if(url.pathname==='/registry/blocklist.json'){
+      registryRequests.push(url.pathname);res.setHeader('content-type','application/json');return res.end(JSON.stringify({schemaVersion:1,blocked:[]}));
+    }
+    if(url.pathname===packagePath){
+      packageDownloads.push({path:url.pathname,bytes:zipBytes.length,sha256:report.sha256});
+      res.setHeader('content-type','application/zip');res.setHeader('content-length',zipBytes.length);return res.end(zipBytes);
+    }
     if(url.pathname==='/v1/chat/completions'){
       const body=JSON.parse(raw),prompt=JSON.stringify(body.messages),images=body.messages.flatMap(m=>Array.isArray(m.content)?m.content:[]).filter(part=>part.type==='image_url').map(part=>part.image_url.url);
       const toolNames=(body.tools||[]).map(tool=>tool.function?.name);
@@ -79,7 +99,7 @@ try{
     res.end(JSON.stringify({schemaVersion:1,plugins:[],blocked:[]}));
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
-  fs.writeFileSync(path.join(profile,'config.json'),JSON.stringify({onboarding:{completed:true},character:'qiqi',petName:'插件测试宠物',tts:{enabled:false},general:{autoCheckUpdates:false},behavior:{walk:false,sleep:false},relay:{url:''},ai:{source:'manual',provider:'openai-compatible',baseUrl:base+'/v1',apiKey:'fixture-local-key',model:'watch-fixture'},plugins:{registrySources:[base],grants:{bili:{granted:[...manifest.permissions,'service:bili-control'],version:manifest.version,at:Date.now()}}}}));
+  fs.writeFileSync(path.join(profile,'config.json'),JSON.stringify({onboarding:{completed:true},character:'qiqi',petName:'插件测试宠物',tts:{enabled:false},general:{autoCheckUpdates:false},behavior:{walk:false,sleep:false},relay:{url:''},ai:{source:'manual',provider:'openai-compatible',baseUrl:base+'/v1',apiKey:'fixture-local-key',model:'watch-fixture'},plugins:{registrySources:[base+'/registry'],grants:{bili:{granted:permissions,version:manifest.version,at:Date.now()}}}}));
   fs.writeFileSync(profile+'.environment-selection.json',JSON.stringify({environment:'test'}));
   async function boot(install=false){
     child=H.launch({userData:profile,cdpPort:CDP,bootstrap:path.join(HOST,'../tests/helpers/appearance-hidden-bootstrap.js'),env:{PET_E2E_TEST:'1',PET_E2E_USE_MOCK_KEYCHAIN:'1',PET_PUBLIC_NATIVE_LOG:path.join(artifact,'native.jsonl'),PET_BILI_E2E_FIXTURE_BASE:base,PET_BILI_E2E_NETWORK_AUDIT:networkAudit,NODE_OPTIONS:'--require='+JSON.stringify(path.join(ROOT,'tests/helpers/watch-network-fixture.cjs')),PET_E2E_ENV_CONFIG:JSON.stringify({test:{accountApiBase:base+'/api',analyticsEvents:'',agentTrace:'',diagnostics:''}})}});
@@ -89,7 +109,17 @@ try{
     if(pages.some(p=>p.url.includes('trial-entry.html'))){const login=await H.findReadyTarget(CDP,'trial-entry.html','trialAccess');await H.evalIn(login,"document.querySelector('#phone').focus()");await H.cdp(login,'Input.insertText',{text:'19977776661'});await H.evalIn(login,"document.querySelector('#sms').focus()");await H.cdp(login,'Input.insertText',{text:'123456'});await activateButton(login,'.primary',{capture:false});check(await H.waitTargetGone(CDP,'trial-entry.html'),'host login uses real input');}
     const pet=await H.findTarget(CDP,'/index.html');await wait(()=>H.evalIn(pet,'!!window.petAPI'),'pet API');
     await H.evalIn(pet,'window.petAPI.openSettings("plugins")');const settings=await H.findReadyTarget(CDP,'settings.html','settings');
-    if(install){const installed=await H.evalIn(settings,`settings.pluginsInstallZip(${JSON.stringify({path:ZIP,sha256:report.sha256,expectPermissions:[...manifest.permissions,'service:bili-control']})})`);check(installed.ok,'release ZIP installs through the host SHA256 and permissions pipeline: '+JSON.stringify(installed));}
+    if(install){
+      const index=await H.evalIn(settings,'settings.pluginsRegistryList({refresh:true})'),entry=index.plugins?.find(item=>item.id==='bili');
+      check(index.fetched&&index.sources.length===1&&index.sources[0]===base+'/registry'&&!!entry,'real host RegistryClient loads the isolated local market fixture');
+      assert.deepEqual(entry.permissions,permissions);assert.deepEqual(entry.platforms,manifest.platforms);
+      check(entry.version===manifest.version&&entry.sha256===report.sha256&&entry.nodeAccess===true&&entry.download===base+packagePath,'market entry preserves actual ZIP version, SHA256, permissions, services, platforms and Node access');
+      report.marketFixture.entry=entry;
+      const installed=await H.evalIn(settings,"settings.pluginsInstallMarket('bili')");
+      check(installed.ok,'release ZIP installs from the local market through the host SHA256 and permissions pipeline: '+JSON.stringify(installed));
+      check(registryRequests.includes('/registry/plugins.json')&&packageDownloads.length===1&&packageDownloads[0].sha256===report.sha256,'market installation downloads the exact tested ZIP bytes over HTTP');
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(target,'manifest.json'),'utf8')),manifest);
+    }
     await wait(()=>H.evalIn(settings,"settings.pluginsList().then(list=>list.find(p=>p.id==='bili')?.status==='active')"),'plugin active: '+child.log.slice(-1000));
     return{pet,settings};
   }
@@ -245,5 +275,5 @@ try{
   fs.writeFileSync(path.join(artifact,'watch-network.json'),JSON.stringify(network,null,2));
   report.ok=true;console.log('PASS real plugin Electron: real input, download and FFmpeg, single image AI, chat delivery, cancellation, close/reopen/restart, scope separation and unload cleanup');
 }catch(error){report.ok=false;report.error=error.stack;if(chat)await H.captureScreenshot(chat,path.join(artifact,'failure-chat.png')).catch(()=>{});if(child){fs.writeFileSync(path.join(artifact,'electron-failure.log'),child.log);try{const failedPanel=await H.findTarget(CDP,'/bili/panel/index.html');report.panelFailure=await H.evalIn(failedPanel,'document.body.innerText');}catch{}}console.error(error);process.exitCode=1;}
-finally{if(child){await H.stopOwned(child);report.ownedElectronStopped=child.exitCode!==null||child.signalCode!==null;}if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));report.ownedMockServerClosed=server.address()===null;}report.fixture={submittedMessages,modelRequests,chatRequests,biliRequests,mediaRequests,mediaCancelled,aiCancelled};fs.writeFileSync(path.join(artifact,'report.json'),JSON.stringify(report,null,2));}
+finally{if(child){await H.stopOwned(child);report.ownedElectronStopped=child.exitCode!==null||child.signalCode!==null;}if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));report.ownedMockServerClosed=server.address()===null;}report.fixture={submittedMessages,modelRequests,chatRequests,biliRequests,mediaRequests,mediaCancelled,aiCancelled,registryRequests,packageDownloads};fs.writeFileSync(path.join(artifact,'report.json'),JSON.stringify(report,null,2));}
 })().finally(()=>process.exit(process.exitCode||0));
