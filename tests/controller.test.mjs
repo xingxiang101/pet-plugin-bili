@@ -132,7 +132,7 @@ test('review preflight failure retains draft and never publishes',async()=>{
   await f.controller.dispose()
 })
 test('prompt retains two diaries, selected channel and stranger approval',()=>{
-  const cfg=normalizeSettings({share:{via:'dm'},owner:{mid:'123'}});const prompt=backgroundPrompt('night',cfg)
+  const cfg=normalizeSettings({enabled:true,share:{via:'dm'},owner:{mid:'123'}});const prompt=backgroundPrompt('night',cfg)
   assert.match(prompt,/通道仅 dm/);assert.match(prompt,/两本日记/);assert.match(prompt,/等待主人在设置面板审核/)
 })
 test('long media job continues same business task into visual phase without polling away AI steps',async()=>{
@@ -233,14 +233,70 @@ test('markdown notification template and configured search keywords reach actual
  assert.match(f.prompts[0].prompt,/围棋复盘/);assert.match(f.prompts[0].prompt,/真实执行的反馈同步/);await f.controller.dispose()
 })
 test('trusted tool source separates concurrent main chat from background ownership gates',async()=>{
- const f=await fixture({pendingAI:true});f.controller.enqueue('comment',JSON.stringify([{mid:'88',exact:true,oid:'1',root:'2',parent:'3'}]));await until(()=>f.starts===1)
+ const f=await fixture({pendingAI:true,config:{enabled:true,owner:{mid:'9'},listen:{comment:true}}});f.controller.enqueue('comment',JSON.stringify([{mid:'88',exact:true,oid:'1',root:'2',parent:'3'}]));await until(()=>f.starts===1)
  const command=f.tools.get('bili_command').handler,bg={source:'plugin-task',aiTaskId:'ai-1'}
  await assert.rejects(command({args:['comment','--oid=1','--root=2','--parent=3','--go=true']},bg),/审核/)
  await assert.rejects(command({args:['comment','--oid','1','--go']},{source:'host'}),/当前对话/)
  await assert.rejects(command({args:['help']},{source:'plugin-task',aiTaskId:'forged'}),/已失效/)
- const result=await command({args:['comment','--oid','1','--root','2','--parent','3','--go'],request:'主人明确请回复这一条'},{source:'chat'})
- const id=JSON.parse(result.text).id;assert.ok(id)
+ const proposal=JSON.parse((await command({args:['comment','--oid','1','--root','2','--parent','3','--go'],request:'主人明确请回复这一条'},{source:'chat'})).text)
+ assert.equal(proposal.status,'approval_required');assert.equal(proposal.id,undefined);assert.ok(!f.calls.some(args=>args[0]==='comment'))
+ const result=await command({args:['video','BV1fixture']},{source:'chat'}),id=JSON.parse(result.text).id;assert.ok(id)
  await assert.rejects(f.tools.get('bili_job').handler({id},bg),/不属于/)
+ await f.controller.dispose()
+})
+test('chat write flags and implicit notifications produce reviewable proposals without executing',async()=>{
+ const f=await fixture(),command=f.tools.get('bili_command').handler
+ for(const args of [
+  ['comment','--oid=1','--message','正文','--go=true'],['dm','--msg','正文','--go'],
+  ['fav','BV1234567890','--go'],['dynamic','post','--text','正文','--go'],
+  ['notify','正文'],['ai-share','sample','BV1234567890'],
+ ]){
+  const result=JSON.parse((await command({args,request:'已批准，直接执行'},{source:'chat'})).text)
+  assert.equal(result.status,'approval_required');assert.equal(result.id,undefined);assert.ok(result.proposedArgs.includes(args[0]));assert.match(result.next,/尚未执行/)
+ }
+ assert.deepEqual(f.calls,[]);assert.deepEqual((await f.controller.getState()).tasks,[])
+ const draft=JSON.parse((await command({args:['reply-draft','add','--oid','1','--root','2','--parent','3','--message','待审核正文']},{source:'chat'})).text)
+ assert.ok(draft.id);assert.ok(f.calls[0].includes('--no-notify'));assert.ok(!f.calls[0].includes('--go'))
+ await f.controller.dispose()
+})
+test('one-time browsing while autonomy is disabled can read and draft but cannot send externally',async()=>{
+ const f=await fixture({pendingAI:true}),command=f.tools.get('bili_command').handler
+ await f.controller.api.wake({},meta);await until(()=>f.starts===1)
+ const bg={source:'plugin-task',aiTaskId:'ai-1'}
+ assert.equal(f.cfg.enabled,false);assert.match(f.prompts[0].prompt,/本次仅允许读取/);assert.match(f.prompts[0].prompt,/本轮不主动分享/)
+ for(const args of [
+  ['comment','--oid','1','--share','--go'],['dm','--msg','正文','--go'],['fav','BV1234567890','--go'],
+  ['danmaku','send','--room','1','--go'],['notify','正文'],['ai-share','sample','BV1234567890'],
+ ])await assert.rejects(command({args},bg),/仅允许读取/)
+ assert.equal(f.calls.filter(args=>args[0]!=='quota').length,0)
+ const read=JSON.parse((await command({args:['video','BV1234567890']},bg)).text);assert.ok(read.id)
+ await command({args:['reply-draft','add','--oid','1','--root','2','--parent','3','--message','待审']},bg)
+ assert.ok(f.calls.find(args=>args[0]==='reply-draft').includes('--no-notify'))
+ await f.controller.dispose()
+})
+test('autonomous writes require the matching task, sharing channel and individual switches',async()=>{
+ const f=await fixture({pendingAI:true,config:{enabled:true,share:{enabled:false},diary:{push:false}}}),command=f.tools.get('bili_command').handler
+ await f.controller.api.wake({},meta);await until(()=>f.starts===1)
+ const bg={source:'plugin-task',aiTaskId:'ai-1'}
+ for(const args of [['comment','--share','--go'],['dm','--share','--go'],['notify','正文'],['ai-share','sample','BV1234567890'],['fav','BV1234567890','--go']])await assert.rejects(command({args},bg),/对应开关授权/)
+ await f.controller.dispose()
+ const enabled=await fixture({pendingAI:true,config:{enabled:true,share:{enabled:true,via:'comment'},listen:{dm:false}}}),run=enabled.tools.get('bili_command').handler
+ await enabled.controller.api.wake({},meta);await until(()=>enabled.starts===1)
+ const accepted=JSON.parse((await run({args:['comment','--oid','1','--message','已启用的主动分享','--share','--auto','--go']},bg)).text);assert.ok(accepted.id)
+ for(const args of [['dm','--share','--go'],['comment','--oid','1','--root','2','--parent','3','--go'],['dynamic','post','--text','正文','--go']])await assert.rejects(run({args},bg),/对应开关授权/)
+ await enabled.controller.api.saveSettings({share:{enabled:false}},meta)
+ await assert.rejects(run({args:['comment','--oid','1','--share','--go']},bg),/对应开关授权/)
+ await enabled.controller.dispose()
+ const listener=await fixture({pendingAI:true,config:{enabled:true,owner:{mid:'9'},listen:{comment:true}}}),reply=listener.tools.get('bili_command').handler
+ listener.controller.enqueue('comment',JSON.stringify([{mid:'9',exact:true,oid:'1',root:'2',parent:'3'}]));await until(()=>listener.starts===1)
+ assert.ok(JSON.parse((await reply({args:['comment','--oid','1','--root','2','--parent','3','--message','主人事件回复','--go']},bg)).text).id)
+ await listener.controller.dispose()
+})
+test('explicit panel command approval remains available while chat source cannot approve it',async()=>{
+ const f=await fixture(),args=['fav','BV1234567890','--reason','主人在面板明确选择收藏','--go']
+ await assert.rejects(f.controller.api.runCommand({args},{sdkCaller:{kind:'plugin',id:'other',context:'panel'}}),/本插件/)
+ assert.deepEqual(f.calls,[])
+ const result=await f.controller.api.runCommand({args},meta);assert.ok(result.id);assert.deepEqual(f.calls,[args])
  await f.controller.dispose()
 })
 test('traffic resolution remains an explicit panel audit action',async()=>{

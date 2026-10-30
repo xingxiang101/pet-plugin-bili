@@ -73,7 +73,7 @@ if (cmd === 'add') {
 
   // 审批只由可信设置面板执行；通知不能承诺模型聊天可放行。
   // best-effort：推送失败不影响入队 ✓
-  try {
+  if (!argv.includes('--no-notify')) try {
     const summary = [
       `【等你审核 1 条回复】→ ${item.who || '对方'}`,
       item.src ? `他说：${item.src}` : '',

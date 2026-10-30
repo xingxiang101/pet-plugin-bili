@@ -47,6 +47,18 @@ test('real worker executes fixed CLI tools and persists journals inside the sele
   await assert.rejects(engine.writeState('.bili-ai/credentials.json', 'bad'), /超出范围/)
 })
 
+test('AI local draft mode persists the full review item without running configured notifications', async t => {
+  const b = setup(t), engine = await createEngine({ pet: b.pet, dataDir: b.dir })
+  t.after(() => engine.dispose())
+  const notice = path.join(engine.dataDir, 'notification.txt')
+  await engine.setConfig({ notify: { type: 'file', path: notice } })
+  const result = await engine.run(['reply-draft', 'add', '--oid', '123', '--root', '456', '--parent', '789', '--message', '等待主人审核的完整正文', '--no-notify'])
+  assert.equal(result.exitCode, 0, result.text)
+  const [draft] = JSON.parse((await engine.run(['reply-draft', 'list', '--json'])).text).items
+  assert.equal(draft.oid, '123'); assert.equal(draft.root, '456'); assert.equal(draft.parent, '789'); assert.equal(draft.message, '等待主人审核的完整正文')
+  assert.equal(fs.existsSync(notice), false)
+})
+
 test('secrets cross real worker IPC and nested CLI stdin, without credential files, argv or environment tokens', async t => {
   const b = setup(t)
   b.secrets.set('bili.credentials', JSON.stringify({ mid: '111', sessdata: 'fake-ipc-session-secret', bili_jct: 'a'.repeat(32), buvid3: 'fake-buvid-secret' }))
