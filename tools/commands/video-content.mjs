@@ -43,7 +43,7 @@ console.log('\n=== 字幕（有的话就等于读到了台词） ===')
 const player = await get(`https://api.bilibili.com/x/player/wbi/v2?${wbiQuery({ bvid: BVID, cid })}`, { cookie })
 const subs = player?.data?.subtitle?.subtitles ?? []
 console.log(`  player code=${player?.code} 字幕条数=${subs.length}`)
-for (const s of subs) console.log(`    ${s.lan_doc} (${s.lan}) auth_key=${String(s.subtitle_url).includes('auth_key') ? '有' : '无(会403)'} -> ${s.subtitle_url}`)
+for (const s of subs) console.log(`    ${s.lan_doc} (${s.lan}) auth_key=${String(s.subtitle_url).includes('auth_key') ? '有' : '无(会403)'}`)
 if (subs.length) {
   const pick = subs.find((s) => s.lan === 'ai-zh') ?? subs.find((s) => s.lan === 'zh-CN') ?? subs[0]
   const first = await get(String(pick.subtitle_url).startsWith('http') ? pick.subtitle_url : 'https:' + pick.subtitle_url, { cookie: '' })

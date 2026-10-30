@@ -85,6 +85,33 @@ test('secrets cross real worker IPC and nested CLI stdin, without credential fil
   assert.ok(requests.every(row => row.cookie?.includes('fake-ipc-session-secret')))
 })
 
+test('real video CLI reads signed subtitles without exposing temporary URL tokens to model material', async t => {
+  const b = setup(t), mock = path.join(b.dir, 'subtitle-fixture.mjs'), requests = path.join(b.dir, 'subtitle-requests.jsonl')
+  const token = 'temporary-subtitle-auth-fixture-1', subtitleUrl = 'https://aisubtitle.hdslb.com/subtitle.json?auth_key=' + token
+  fs.writeFileSync(mock, `import fs from 'node:fs';globalThis.fetch=async(input,o={})=>{
+    const u=new URL(input);fs.appendFileSync(${JSON.stringify(requests)},JSON.stringify({url:u.href,cookie:new Headers(o.headers).get('cookie')})+'\\n');
+    if(u.pathname.endsWith('/nav'))return Response.json({code:0,data:{wbi_img:{img_url:'https://i0.hdslb.com/7cd084941338484aae1ad9425b84077c.png',sub_url:'https://i0.hdslb.com/4932caff0ff746eab6f01bf08b70ac45.png'}}});
+    if(['/x/web-interface/view','/x/web-interface/wbi/view'].includes(u.pathname))return Response.json({code:0,data:{aid:12,pages:[{cid:34}],title:'字幕隐私回归',owner:{name:'fixture'},duration:4,pubdate:1,tname:'测试',desc:'只读材料',pic:'https://i0.hdslb.com/cover.png'}});
+    if(u.pathname==='/x/tag/archive/tags')return Response.json({code:0,data:[]});
+    if(u.pathname==='/x/player/wbi/v2')return Response.json({code:0,data:{subtitle:{subtitles:[{lan:'ai-zh',lan_doc:'中文',subtitle_url:${JSON.stringify(subtitleUrl)}}]}}});
+    if(u.href===${JSON.stringify(subtitleUrl)})return Response.json({body:[{from:0,to:3,content:'已经读到合法的完整字幕正文'}]});
+    if(u.hostname==='comment.bilibili.com')return new Response('<i></i>');
+    throw Error('unexpected fixture request')
+  }`)
+  const old = process.env.NODE_OPTIONS; process.env.NODE_OPTIONS = '--import=' + pathToFileURL(mock).href
+  t.after(() => { if (old === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = old })
+  b.secrets.set('bili.credentials', JSON.stringify({mid:'111',sessdata:'fake-subtitle-login',bili_jct:'a'.repeat(32)}))
+  const engine = await createEngine({pet:b.pet,dataDir:b.dir}); t.after(() => engine.dispose())
+  const result = await engine.run(['video','BV1234567890'])
+  assert.equal(result.exitCode,0,result.text); assert.match(result.text,/中文 \(ai-zh\) auth_key=有/)
+  assert.match(result.text,/已经读到合法的完整字幕正文/)
+  assert.ok(!result.text.includes(token)); assert.ok(!result.text.includes(subtitleUrl)); assert.ok(!JSON.stringify(result.images).includes(token))
+  assert.ok(!JSON.stringify(result).includes('auth_key='+token))
+  const rows = fs.readFileSync(requests,'utf8').trim().split('\n').map(line=>JSON.parse(line))
+  const subtitle = rows.find(row=>row.url===subtitleUrl); assert.ok(subtitle,'the full signed URL must still be fetched')
+  assert.equal(subtitle.cookie,null)
+})
+
 test('scope, Bili account switches and cancellation stop old work and isolate state', async t => {
   const b = setup(t)
   b.secrets.set('bili.credentials', JSON.stringify({ mid:'111', sessdata:'fake-session-one' }))
