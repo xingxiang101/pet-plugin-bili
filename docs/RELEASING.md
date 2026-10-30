@@ -1,8 +1,8 @@
 # CI 安装包与市场投稿
 
-0.2.0 候选的变更和兼容范围见 [0.2.0 发布说明](release-0.2.0.md)。当前已发布的双平台包是 0.1.1；后续版本使用实际 manifest、CI 和 Release 回执，不复用已有版本的摘要。
+0.2.0 的变更和兼容范围见 [0.2.0 发布说明](release-0.2.0.md)。各版本使用实际 manifest、CI 和 Release 回执，不复用已有版本的摘要。0.1.1 的 Windows 包遗漏 winpthreads 许可证，0.2.0 补齐并检查该依赖；旧资产保持不变，Windows 分发使用完成最终验收的修正版本。
 
-插件 `0.1.1` 使用同一安装 ZIP 支持 macOS Apple 芯片（`darwin-arm64`）和 Windows x64（`win32-x64`），要求含后台 AI、完成回复交付及平台检查接口的桌宠 `0.30.0` 或以上兼容测试版。插件 manifest 和市场条目都须声明这两个平台及最低宿主版本。公开源码和 CI 配置不代表已经上架；先验证 CI 候选，再发布测试 Release，待真实兼容宿主可用且最终包验收完成后提交市场审核。已发布的 `0.1.0` 仍为仅 Mac 版本，不覆盖原有资产。
+插件 `0.2.0` 使用同一安装 ZIP 支持 macOS Apple 芯片（`darwin-arm64`）和 Windows x64（`win32-x64`），要求含后台 AI、完成回复交付及平台检查接口的桌宠 `0.30.0` 或以上兼容测试版。插件 manifest 和市场条目都须声明这两个平台及最低宿主版本。公开源码和 CI 配置不代表已经上架；先验证 CI 候选，再发布测试 Release，待真实兼容宿主可用且最终包验收完成后提交市场审核。已发布的 `0.1.0` 仍为仅 Mac 版本，不覆盖原有资产。
 
 ## 先验证 CI 构建
 
@@ -12,7 +12,7 @@
 
 随后将两个平台目录组装为一个 `bili-<version>.zip`，校验平台、来源与许可证，并记录跨平台 ZIP 文件模式。macOS 和 Windows 验证任务均下载这一个 ZIP，以 `scripts/verify-release.py` 核对文件摘要和包内来源并解包；在各自系统运行完整 `npm test`，再以 `BILI_RELEASE_DIR` 指向解包目录运行 `npm run test:release:native`。后者使用真实本地 HTTP 下载和包内原生 FFmpeg 抽帧，通过模拟宿主 AI 接口检查一次聊天交付，并验证中文及空格缓存路径。两个平台的验证报告随候选保留，缺任一平台成功结果不能发布。
 
-FFmpeg 的许可证、完整对应源码归档、来源摘要和构建脚本均随包提供；Windows 另附 zlib 源码、zlib/GCC runtime/MinGW-w64 许可。开发依赖 `ffmpeg-static` 只生成测试视频，不进入安装包。
+FFmpeg 的许可证、完整对应源码归档、来源摘要和构建脚本均随包提供；Windows 另附 zlib 源码、zlib/GCC runtime/MinGW-w64/winpthreads 许可。开发依赖 `ffmpeg-static` 只生成测试视频，不进入安装包。
 
 产物包括安装 ZIP、对应 `.sha256` 和记录源码提交、CI run、平台、最低宿主要求及摘要的 `release.json`。回执中的 `ci-candidate` 仅说明构建来源，不代表宿主兼容验收或市场登记已经完成。Actions 外层 artifact ZIP 仅用于传递文件，应提取其中的 `bili-<version>.zip` 作为插件安装包。
 
@@ -32,7 +32,7 @@ CI Release 成功后，按官方 `pet-plugin-registry` 的当前 schema 和政�
 
 投稿说明应提供以下审核信息：
 
-- **来源与安装包**：公开源码提交、成功 CI run、实际 Release、安装 ZIP 的 SHA-256 和大小；明确 `0.1.1` 支持 Apple 芯片 Mac 和 Windows x64，并列出两个原生平台的验收结果。
+- **来源与安装包**：公开源码提交、成功 CI run、实际 Release、安装 ZIP 的 SHA-256 和大小；明确 `0.2.0` 支持 Apple 芯片 Mac 和 Windows x64，并列出两个原生平台的验收结果。
 - **宿主要求**：说明已在兼容的桌宠 `0.30.0` 测试构建验证。列出市场安装、扫码登录、聊天发送 B 站链接、后台抽帧、同一聊天收到回复、停用、重启和卸载的实际结果；未做的步骤如实标明。
 - **权限**：逐项复制 manifest 的 `permissions`，再将 `services: ["bili-control"]` 展开为 `service:bili-control`。当前共 40 项，其中网络域名 30 项；以提交版本为准，不能只复制旧版权限列表。
 - **本机访问**：明确 `nodeAccess: true`，说明媒体缓存、随机任务目录、随包 FFmpeg 子进程、凭据 `pet.secrets`、卸载后保留数据和默认关闭自主活动。
