@@ -1,6 +1,6 @@
 {
   "name": "pet-plugin-bili",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "让当前宠物自主浏览 B 站、理解视频、记录日记，并按设置处理互动。",
   "keywords": [
     "dsh",
