@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import path from 'node:path'
 import { createController, normalizeSettings, backgroundPrompt, videoId } from '../src/controller.mjs'
 const meta={sdkCaller:{kind:'plugin',id:'bili',context:'panel'}}
 const copy=value=>JSON.parse(JSON.stringify(value))
@@ -15,7 +16,7 @@ async function fixture(options={}){
   const data=options.data||new Map(),secrets=new Map(),files=new Map(),jobs=new Map(),tools=new Map(),calls=[],prompts=[],deliveries=[]
   let cfg=normalizeSettings(options.config||{}),authOptions,scope={scopeId:'scope-a',revision:1},starts=0
   if(options.logged!==false)secrets.set('bili.credentials.test',JSON.stringify({sessdata:'test-login-value-123456789',bili_jct:'a'.repeat(32),mid:'42',name:'pet-bili'}))
-  const engine={dataDir:'/isolated',getConfig:async()=>cfg,setConfig:async value=>{cfg=copy(value)},readState:async p=>files.get(p),writeState:async(p,value)=>{files.set(p,copy(value))},accountChanged:()=>{calls.push(['accountChanged'])},dispose:()=>{calls.push(['dispose'])},cancel:id=>{calls.push(['cancel',id]);return true},start:async args=>{calls.push(args);const id='job-'+calls.length;jobs.set(id,{id,status:'completed',result:{text:'done',images:[],exitCode:0}});return id},get:id=>jobs.get(id),run:async args=>{calls.push(args);if(options.run)return options.run(args);return{text:args[0]==='dm-await'?JSON.stringify({hit:false}):args[0]==='inbox'?JSON.stringify({items:[]}):'done',images:[],exitCode:0}}}
+  const engine={dataDir:path.resolve('isolated'),getConfig:async()=>cfg,setConfig:async value=>{cfg=copy(value)},readState:async p=>files.get(p),writeState:async(p,value)=>{files.set(p,copy(value))},accountChanged:()=>{calls.push(['accountChanged'])},dispose:()=>{calls.push(['dispose'])},cancel:id=>{calls.push(['cancel',id]);return true},start:async args=>{calls.push(args);const id='job-'+calls.length;jobs.set(id,{id,status:'completed',result:{text:'done',images:[],exitCode:0}});return id},get:id=>jobs.get(id),run:async args=>{calls.push(args);if(options.run)return options.run(args);return{text:args[0]==='dm-await'?JSON.stringify({hit:false}):args[0]==='inbox'?JSON.stringify({items:[]}):'done',images:[],exitCode:0}}}
   const pet={storage:{get:async(k,fallback)=>data.has(k)?copy(data.get(k)):fallback,set:async(k,v)=>{data.set(k,copy(v))}},secrets:{get:async k=>secrets.get(k),set:async(k,v)=>{secrets.set(k,v)},delete:async k=>secrets.delete(k)},profile:{getScope:async()=>({...scope})},ai:{start:async(prompt,opts)=>{starts++;prompts.push({prompt,opts});return{id:'ai-'+starts,status:'running'}},get:async()=>options.pendingAI?{status:'running'}:{status:'completed',text:'完成真实任务'},cancel:async id=>{calls.push(['ai.cancel',id]);options.pendingAI=false;return true},deliver:async id=>{deliveries.push(id);return true}},tools:{register:spec=>tools.set(spec.name,{...spec,handler:(input,context={source:'host'})=>spec.handler(input,context)})},scheduler:{every:async()=> 'timer-1',cancel:async id=>{calls.push(['timer.cancel',id])}}}
   const controller=await createController({pet,engine,scopeKey:'test',scopeId:'scope-a',scopeRevision:1,now:options.now||Date.now,random:()=>0,verify:options.verify||(async()=>({mid:'42',name:'pet-bili'})),authFactory:opts=>{authOptions=opts;return{start:async()=>({id:'qr',status:'waiting',image:'data:image/png;base64,AA=='}),poll:async()=>({status:'waiting'}),cancel:()=>({status:'cancelled'}),dispose:()=>{}}}})
   controller.registerTools()
@@ -202,8 +203,9 @@ test('known compatibility settings and aliases survive normalization',()=>{
 })
 test('dynamic edit text is written only to generated current-account import path',async()=>{
  const f=await fixture();const result=await f.controller.api.prepareText({text:'新的动态正文',path:'/outside.txt'},meta)
- assert.match(result.path,/^\/isolated\/\.dsh\/imports\/dynamic-edit-[a-f0-9-]+\.txt$/)
- assert.equal(f.files.get(result.path.replace('/isolated/','')),'新的动态正文')
+ const relative=path.relative(f.engine.dataDir,result.path).split(path.sep).join('/')
+ assert.match(relative,/^\.dsh\/imports\/dynamic-edit-[a-f0-9-]+\.txt$/)
+ assert.equal(f.files.get(relative),'新的动态正文')
  await assert.rejects(f.controller.api.prepareText({text:'x'.repeat(1001)},meta),/1000/)
  await assert.rejects(f.controller.api.prepareText({text:'x'}),/本插件/)
  await f.controller.dispose()

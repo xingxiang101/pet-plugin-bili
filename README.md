@@ -65,6 +65,8 @@ FFmpeg 只读取已下载的本地文件，在每个 `-i` 前设置 `-protocol_w
 
 `scripts/build-ffmpeg.sh` 从固定官方源码编译，关闭 GPL、nonfree 和自动依赖探测。开发依赖 `ffmpeg-static` 仅用于测试素材，不进入发布 ZIP，其本机下载产物不能替代随包构建。
 
+Windows 构建静态链接固定版本的 zlib，并记录 MSYS2 UCRT64 工具链版本。`bin/win32-x64` 同时包含 `ZLIB-LICENSE`、zlib 对应源码归档，以及 `licenses/gcc-runtime` 中的 GCC Runtime Library Exception 和 `licenses/mingw-runtime` 中的 MinGW-w64 运行库许可；各组件来源、摘要和许可证位置写入 `SOURCE.json`。构建检查导入 DLL，仅允许 Windows 系统库，避免要求用户另装 MSYS2 或编译器运行库。
+
 构建时传入已解压源码、输出目录和固定官方源码归档三个绝对路径：
 
 ```sh
