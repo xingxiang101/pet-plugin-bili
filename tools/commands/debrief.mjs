@@ -246,7 +246,7 @@ if (!opt['no-frames']) {
         const every = typeof opt.substrip === 'string' && Number(opt.substrip) > 0 ? Number(opt.substrip) : 7   // ⚠️ 裸旗标=true → Number(true)=1 是坑，必须落回 7
         const rows = Math.max(4, Math.min(20, Math.ceil((dur || 90) / every)))
         const outPng = path.join(path.dirname(mp4), `${bvid}-substrip.png`)
-        execFileSync(ff, ['-y', '-loglevel', 'error', '-i', mp4,
+        execFileSync(ff, ['-y', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', mp4,
           '-vf', `fps=1/${every},crop=iw:ih*0.32:0:ih*0.57,scale=1280:-1,tile=1x${rows}`,
           '-frames:v', '1', outPng], { stdio: 'ignore' })
         assetLog(`STRIP: ${outPng}`)

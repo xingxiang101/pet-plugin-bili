@@ -112,6 +112,20 @@ test('media exposes image bytes as bounded data URLs and rejects paths outside t
   assert.match((await collectImages(`封面: ${mislabeled}`, b.dir)).images[0], /^data:image\/png;base64,/)
 })
 
+test('large local images still compress within model limits with file-only FFmpeg inputs', async t => {
+  const { execFileSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const b=setup(t), generator=fileURLToPath(new URL('../node_modules/ffmpeg-static/ffmpeg',import.meta.url))
+  const image=path.join(b.dir,'large-frame.png')
+  execFileSync(generator,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=size=1280x720,noise=alls=50:allf=u','-frames:v','1',image],{timeout:30000})
+  assert.ok(fs.statSync(image).size>96*1024,'fixture must use the compression path')
+  const result=await collectImages(`SHEET: ${image}`,b.dir)
+  assert.deepEqual(result.warnings,[])
+  assert.equal(result.images.length,1)
+  assert.match(result.images[0],/^data:image\/jpeg;base64,/)
+  assert.ok(Buffer.from(result.images[0].split(',')[1],'base64').length<=96*1024)
+})
+
 test('drafts, dynamic read-back, live events and cover-only debrief work through real workers', async t => {
   const b = setup(t), mock = path.join(b.dir, 'read-fixtures.mjs'), requests = path.join(b.dir, 'requests.jsonl')
   const rootId = '9223372036854775801', oid = '9223372036854775802', referer = 'https://www.bilibili.com/opus/9223372036854775803'

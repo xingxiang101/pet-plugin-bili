@@ -55,7 +55,7 @@ export async function collectImages(text, dataDir, { signal } = {}) {
         if (!ffmpeg) throw Error('图片超过 AI 输入预算且找不到 FFmpeg 进行压缩')
         let fit = false
         for (const [width, q] of [[1600, 10], [1280, 16], [960, 24], [720, 28]]) {
-          const result = await exec(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', actual,
+          const result = await exec(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', actual,
             '-vf', `scale='min(${width},iw)':-1`, '-frames:v', '1', '-q:v', String(q), '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'],
           { encoding: 'buffer', maxBuffer: 2 * 1024 * 1024, timeout: 30000, windowsHide: true, signal })
           bytes = result.stdout
