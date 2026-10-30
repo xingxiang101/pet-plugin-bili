@@ -25,6 +25,8 @@ function bundle(root,over={}) {
 }
 test('builder produces a local candidate and includes the reproducible FFmpeg build script',t=>{
   const b=fixture(t);bundle(b.root)
+  fs.mkdirSync(path.join(b.root,'tools/docs'),{recursive:true})
+  fs.writeFileSync(path.join(b.root,'tools/docs/reference.md'),'unused third-party reference')
   const result=b.run();assert.equal(result.status,0,result.stderr)
   assert.match(result.stdout,/local-candidate-unpublished/)
   const inspect=spawnSync('python3',['-c','import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print("\\n".join(z.namelist()))',path.join(b.root,'dist/bili-0.0.0.zip')],{encoding:'utf8'})
@@ -32,6 +34,7 @@ test('builder produces a local candidate and includes the reproducible FFmpeg bu
   assert.match(inspect.stdout,/UPSTREAM-README.md/)
   assert.match(inspect.stdout,/lib\/credential-values.js/)
   assert.ok(!inspect.stdout.includes('lib/credentials.js'))
+  assert.ok(!inspect.stdout.includes('tools/docs/'))
 })
 test('builder rejects symlink assets, including directory ancestors and dependencies', {skip:process.platform==='win32'},t=>{
   const b=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'bili-external-'));t.after(()=>fs.rmSync(outside,{recursive:true,force:true}))

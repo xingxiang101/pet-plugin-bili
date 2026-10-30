@@ -73,6 +73,8 @@ for dirname in ('src', 'panel', 'tools', 'bin'):
         continue
     checked_path(directory, directory=True)
     for parent, directories, names in os.walk(directory, followlinks=False):
+        if Path(parent) == ROOT / 'tools':
+            directories[:] = [name for name in directories if name != 'docs']
         for child in directories:
             checked_path(Path(parent) / child, directory=True)
         files.extend(checked_path(Path(parent) / child) for child in names)
