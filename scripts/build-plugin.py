@@ -36,6 +36,14 @@ def checked_path(source, boundary=ROOT, directory=False):
 ffmpeg_files = sorted(p for p in (ROOT / 'bin').glob('*/ffmpeg*') if p.name in ('ffmpeg', 'ffmpeg.exe'))
 if not args.system_ffmpeg and not ffmpeg_files:
     parser.error('No bundled FFmpeg. Build an audited binary first, or explicitly pass --system-ffmpeg for a development package.')
+bundled_platforms = sorted({p.parent.name for p in ffmpeg_files})
+declared_platforms = manifest.get('platforms')
+if declared_platforms is not None and (not isinstance(declared_platforms, list) or
+        not declared_platforms or any(not isinstance(value, str) for value in declared_platforms) or
+        len(set(declared_platforms)) != len(declared_platforms)):
+    parser.error('Manifest platforms must be a nonempty list of unique platform strings')
+if not args.system_ffmpeg and declared_platforms is not None and sorted(declared_platforms) != bundled_platforms:
+    parser.error('Manifest platforms differ from the bundled FFmpeg platforms')
 for binary in ffmpeg_files:
     checked_path(binary)
     for required in ('LICENSE', 'SOURCE.json', 'version.txt'):
@@ -96,7 +104,7 @@ with zipfile.ZipFile(filename, 'w', compression=zipfile.ZIP_DEFLATED, compressle
 digest = hashlib.sha256(filename.read_bytes()).hexdigest()
 metadata = {'file': filename.name, 'sha256': digest, 'bytes': filename.stat().st_size,
             'nodeAccess': True, 'systemFfmpegRequired': args.system_ffmpeg,
-            'platforms': sorted(p.name for p in (ROOT / 'bin').glob('*') if p.is_dir()),
+            'platforms': bundled_platforms,
             'status': 'local-candidate-unpublished'}
 (out / 'build.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n')
 print(json.dumps(metadata, ensure_ascii=False))

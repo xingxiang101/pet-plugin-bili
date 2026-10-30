@@ -43,6 +43,9 @@ jobs:
           if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) || pkg.version !== manifest.version) {
             throw new Error('Package and manifest versions must be matching semantic versions');
           }
+          if (manifest.minHostVersion !== '0.30.0' || JSON.stringify(manifest.platforms) !== '["darwin-arm64"]') {
+            throw new Error('This release requires desktop-pet 0.30.0 and darwin-arm64');
+          }
           if (process.env.GITHUB_EVENT_NAME === 'push' && process.env.GITHUB_REF_NAME !== 'v' + manifest.version) {
             throw new Error('Tag and manifest versions differ');
           }
@@ -92,7 +95,8 @@ jobs:
           package = Path('dist') / build['file']
           digest = hashlib.sha256(package.read_bytes()).hexdigest()
           if (digest != build['sha256'] or package.stat().st_size != build['bytes'] or
-                  build['platforms'] != ['darwin-arm64'] or build['systemFfmpegRequired'] or not build['nodeAccess']):
+                  build['platforms'] != ['darwin-arm64'] or manifest.get('platforms') != build['platforms'] or
+                  build['systemFfmpegRequired'] or not build['nodeAccess']):
               raise SystemExit('Final package metadata mismatch')
           with zipfile.ZipFile(package) as archive:
               names = set(archive.namelist())
@@ -116,14 +120,16 @@ jobs:
                      'sourceSha': os.environ['GITHUB_SHA'], 'workflowRunId': os.environ['GITHUB_RUN_ID'],
                      'pluginId': manifest['id'], 'version': manifest['version'], 'file': package.name,
                      'sha256': digest, 'bytes': package.stat().st_size, 'platforms': build['platforms'],
-                     'nodeAccess': True, 'status': 'ci-candidate', 'hostCompatibility': 'unreleased-sdk-required'}
+                     'minHostVersion': manifest['minHostVersion'], 'nodeAccess': True,
+                     'status': 'ci-candidate', 'hostCompatibility': 'separate-host-validation-required'}
           Path('dist/release.json').write_text(json.dumps(receipt, indent=2) + '\n')
           Path('dist/RELEASE_NOTES.md').write_text(
               'B 站生活 ' + manifest['version'] + ' — macOS arm64 testing candidate.\n\n'
               'Built from public source by GitHub Actions, with bundled LGPL FFmpeg and source provenance.\n\n'
-              'Requires the unreleased host background AI and completed reply delivery SDK. '
-              'The manifest version floor alone does not establish compatibility. '
-              'A compatible published host build and marketplace review are still required.\n\n'
+              'Requires a compatible desktop-pet ' + manifest['minHostVersion'] + '+ testing build with '
+              'background AI, completed chat reply delivery and platform constraints. '
+              'This build receipt does not establish host validation or marketplace availability. '
+              'The desktop-pet marketplace registration is reviewed separately.\n\n'
               'Source commit: `' + os.environ['GITHUB_SHA'] + '`. '
               'See `release.json` for the package digest and CI run identity.\n')
           PY

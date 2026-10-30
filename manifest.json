@@ -4,7 +4,10 @@
   "description": "让当前宠物按作息浏览和理解 B 站视频、记录日记，并处理评论、主人私信、收藏与动态。",
   "version": "0.1.0",
   "apiVersion": 1,
-  "minHostVersion": "0.29.1",
+  "minHostVersion": "0.30.0",
+  "platforms": [
+    "darwin-arm64"
+  ],
   "kind": [
     "tool",
     "panel",
@@ -24,9 +27,12 @@
     "net:api.live.bilibili.com",
     "net:live.bilibili.com",
     "net:www.bilibili.com",
+    "net:comment.bilibili.com",
     "net:i0.hdslb.com",
     "net:i1.hdslb.com",
     "net:i2.hdslb.com",
+    "net:api.github.com",
+    "net:raw.githubusercontent.com",
     "events",
     "files"
   ],

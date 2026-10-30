@@ -51,3 +51,14 @@ test('builder rejects binary/source digest mismatch and a nonfree configuration'
   meta.sourceSha256=createHash('sha256').update(fs.readFileSync(path.join(dir,'ffmpeg-source.tar.gz'))).digest('hex');fs.writeFileSync(path.join(dir,'SOURCE.json'),JSON.stringify(meta));fs.writeFileSync(path.join(dir,'version.txt'),'--enable-nonfree')
   result=b.run();assert.notEqual(result.status,0);assert.match(result.stderr,/nonfree/)
 })
+test('builder rejects unsupported manifest platforms before producing an install ZIP',t=>{
+  const b=fixture(t);bundle(b.root)
+  for(const platforms of [['win32-x64'],[],['darwin-arm64','darwin-arm64'],[null]]){
+    fs.writeFileSync(path.join(b.root,'manifest.json'),JSON.stringify({version:'0.0.0',platforms}))
+    const result=b.run();assert.notEqual(result.status,0);assert.match(result.stderr,/platforms/)
+    assert.ok(!fs.existsSync(path.join(b.root,'dist/bili-0.0.0.zip')))
+  }
+  fs.writeFileSync(path.join(b.root,'manifest.json'),JSON.stringify({version:'0.0.0',platforms:['darwin-arm64']}))
+  const result=b.run();assert.equal(result.status,0,result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout).platforms,['darwin-arm64'])
+})

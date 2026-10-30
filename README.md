@@ -1,8 +1,8 @@
-# B 站生活：桌宠插件迁移候选
+# B 站生活：桌宠插件
 
 让当前桌宠浏览 B 站、理解视频、记录经历，并按设置处理评论、主人私信、收藏和动态。沿用宿主当前宠物的人设与记忆，不创建独立鲸鱼角色。
 
-本目录是基于 `Alterssss/dsh-bili-whale` 的完整迁移候选，尚未发布。需要本次新增 SDK 的宿主候选构建；仅满足版本号 `0.29.1` 不能证明兼容。
+本插件基于 `Alterssss/dsh-bili-whale` 迁移。首包仅支持 **macOS Apple 芯片（`darwin-arm64`）**，要求 **桌宠 0.30.0 或以上的兼容测试版**，包含后台 AI、完成回复交付及平台检查接口。宿主测试版通过受邀渠道提供。Release 和桌宠插件市场的实际状态以对应页面为准；源码或 CI 构建成功不代表已经上架。
 
 ## 已迁移的能力
 
@@ -26,13 +26,27 @@
 
 插件在 Node.js 工具进程运行，可以访问本机文件、创建子进程和直接联网。它会连接 B 站接口及视频 CDN，下载媒体、执行 FFmpeg、发送设置中启用的通知。宿主的逐域名网络权限不能沙箱化 Node.js 本身；发布登记必须如实标记 `nodeAccess: true`。
 
+已声明的固定网络域名及用途：
+
+| 域名 | 用途 |
+| --- | --- |
+| `api.bilibili.com`、`passport.bilibili.com`、`api.vc.bilibili.com` | 视频、账号、二维码登录、私信和动态接口 |
+| `api.live.bilibili.com`、`live.bilibili.com` | 直播资料和弹幕接口 |
+| `www.bilibili.com`、`comment.bilibili.com` | 页面内容和视频弹幕材料 |
+| `i0.hdslb.com`、`i1.hdslb.com`、`i2.hdslb.com` | 封面及图片材料 |
+| `api.github.com`、`raw.githubusercontent.com` | 仅在读取视频素材时显式指定 `--repo`，补充该公开仓库的信息和 README |
+
+视频、字幕、图片和直播 WebSocket 的实际地址也会由 B 站接口返回，域名可能随 CDN 节点变化；这些请求由插件通过 Node.js 发出。用户另行配置 HTTPS Webhook 后，通知功能会向该地址发送内容，默认未配置。上述动态地址不通过通配域名权限伪装为已获宿主网络沙箱约束；市场审核需同时检查完整源码、`nodeAccess: true` 及这些用途。
+
+市场权限列表还需包含 `services` 中的 `bili-control` 对应项 `service:bili-control`，用于面板与插件控制服务通信。
+
 登录凭据只存宿主 `pet.secrets`，调用时经内存 IPC 传递，不写普通配置、命令行参数、环境变量或日志。配置和日记按宿主账号／宠物上下文及 B 站账号分仓；媒体存于 `~/.desktop-pet-plugin-data/bilibili/` 下的随机目录。不会自动读取旧版私人账本。卸载保留日记和缓存。
 
 后台 AI 仅开放本插件声明的工具，首屏单次观看使用固定材料且不开放工具。后台任务沿用当前宠物的人设，并把有界摘要写入该宠物的经历。主人发起的多阶段工具任务只将最后一次已完成的 AI 回复交付到桌宠聊天，自主巡视保持静默。切换宿主账号、宠物或 B 站账号时，旧任务停止；取消也会撤销尚未交付的最终回复。重启不会自动重放任务或结果不确定的外部写操作。
 
 ## FFmpeg 与安装包
 
-运行时不下载或安装执行程序。当前本地候选随包提供 **macOS arm64** 的 FFmpeg n6.1.1 LGPL 构建，包括许可证、完整上游源码归档、源码摘要、配置和构建脚本。插件使用前校验包内二进制摘要；其他平台仍需各自构建及实机验证。
+运行时不下载或安装执行程序。首包随包提供 **macOS arm64** 的 FFmpeg n6.1.1 LGPL 构建，包括许可证、完整上游源码归档、源码摘要、配置和构建脚本。插件使用前校验包内二进制摘要；其他平台尚不支持，需各自构建及实机验证后另行发布。`manifest.json` 的 `platforms` 和构建产物的平台列表必须一致。
 
 `scripts/build-ffmpeg.sh` 从固定官方源码编译，关闭 GPL、nonfree 和自动依赖探测。开发依赖 `ffmpeg-static` 仅用于测试素材，不进入发布 ZIP，其本机下载产物不能替代随包构建。
 
@@ -54,6 +68,8 @@ PET_PLUGIN_HOST_DIR=/absolute/path/to/desktop-pet/demo npm run test:electron
 ```
 
 `dist/build.json` 记录 ZIP 的 SHA-256、大小和平台。ZIP 只包含新入口、面板、引擎、复用工具和生产依赖，旧 DSH 入口与旧调度器不会加载。
+
+CI 候选、带标签的测试 Release 和桌宠插件市场登记的顺序及审核要求见 [docs/RELEASING.md](docs/RELEASING.md)。测试 Release 可以作为市场安装来源；是否上架取决于官方登记审核和最终安装验收。
 
 自动验证使用隔离宿主资料、本地模拟账号／模型和合成视频，不发送真实 B 站评论、私信或动态。真实 B 站扫码、观看效果及发送后回读仍需单独验收，不能用模拟测试替代。
 
