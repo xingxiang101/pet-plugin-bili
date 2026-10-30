@@ -3,6 +3,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { configPath } from './paths.mjs'
+import { assertNetworkUrl, declaredFetch } from './network-policy.mjs'
 
 export const RISK_DEFAULTS = { minGapMs: 1500, readHourly: 600, readDaily: 3000, writeHourly: 12, writeDaily: 30, writeGapSec: 120, dmGapSec: 60 }
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
@@ -89,8 +90,8 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
     return digest(url.origin + url.pathname + ':' + value)
   }
   async function guarded(input, options = {}) {
-    const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url)
-    if (!isBili(url)) return transport(input, options)
+    const url = assertNetworkUrl(input)
+    if (!isBili(url)) return declaredFetch(input, options, transport)
     const headers = options.headers ?? input.headers ?? {}, account = identity(headers)
     const method = String(options.method ?? input.method ?? 'GET').toUpperCase()
     const writing = !['GET','HEAD','OPTIONS'].includes(method)
@@ -155,7 +156,7 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
       }
       const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000)
       dispatched = true
-      const response = await transport(input, { ...options, signal })
+      const response = await declaredFetch(input, { ...options, signal }, transport)
       let payload
       if ((response.headers?.get('content-type') ?? '').includes('json')) {
         try { payload = await response.clone().json() } catch {}
@@ -210,6 +211,6 @@ export function trafficGuard() { return singleton ??= createTrafficGuard({ direc
 export function guardedFetch(...args) {
   // Legacy fixture suites replace fetch and opt out explicitly. Production
   // BILI_NO_CACHE does NOT disable traffic protection.
-  if (process.env.BILI_TRAFFIC_TEST === '1' && process.env.NODE_TEST_CONTEXT) return globalThis.fetch(...args)
+  if (process.env.BILI_TRAFFIC_TEST === '1' && process.env.NODE_TEST_CONTEXT) return declaredFetch(...args)
   return trafficGuard().fetch(...args)
 }

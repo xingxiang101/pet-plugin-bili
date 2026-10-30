@@ -47,6 +47,7 @@ for (const s of subs) console.log(`    ${s.lan_doc} (${s.lan}) auth_key=${String
 if (subs.length) {
   const pick = subs.find((s) => s.lan === 'ai-zh') ?? subs.find((s) => s.lan === 'zh-CN') ?? subs[0]
   const first = await get(String(pick.subtitle_url).startsWith('http') ? pick.subtitle_url : 'https:' + pick.subtitle_url, { cookie: '' })
+  if (first?.code === -1 && first.message) console.log(`  字幕读取失败：${first.message}`)
   const body = first?.body ?? []
   console.log(`  字幕行数=${body.length}（轨道 ${pick.lan}），前 40 行：`)
   for (const line of body.slice(0, 40)) console.log(`    [${line.from.toFixed(1)}s] ${line.content}`)

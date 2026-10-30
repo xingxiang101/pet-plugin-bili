@@ -1,5 +1,6 @@
 import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
+import { assertNetworkUrl, declaredWebSocket } from '../lib/network-policy.mjs'
 // Live-room danmaku: pre-flight permission check, one send, read-back verify,
 // and a real-time listener (WebSocket, no dependencies).
 //
@@ -168,14 +169,17 @@ if (mode === 'live') {
   const dan = (await j(`https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?${wbiQs}`, { headers: H() })).body
   if (dan.code !== 0) { console.error(`getDanmuInfo code=${dan.code} ${JSON.stringify(dan).slice(0, 200)}`); process.exit(6) }
   const token = dan.data?.token
-  const hosts = dan.data?.host_list ?? []
-  if (!token || !hosts.length) { console.error('拿不到 token 或弹幕服务器列表'); process.exit(6) }
+  const hosts = (dan.data?.host_list ?? []).filter(host => {
+    try { assertNetworkUrl(`wss://${host.host}:${host.wss_port}/sub`, { websocket: true }); return true }
+    catch (error) { console.error(error.message); return false }
+  })
+  if (!token || !hosts.length) { console.error('没有可用的已声明弹幕服务器；市场版本已停止连接，可改用弹幕历史轮询。'); process.exit(6) }
   const host = hosts[0]
   const url = `wss://${host.host}:${host.wss_port}/sub`
   console.log(`房间 ${realId}「${info.data?.title ?? ''}」  我=${nav.data?.uname ?? '?'} (mid ${myUid})`)
   console.log(`连接 ${url}  监听 ${seconds} 秒${grep ? `，含「${grep}」的弹幕会标 ★` : ''}`)
 
-  const ws = new WebSocket(url)
+  const ws = declaredWebSocket(url)
   try { ws.binaryType = 'arraybuffer' } catch {}
   const enc = new TextEncoder()
   const mkPacket = (op, str) => {

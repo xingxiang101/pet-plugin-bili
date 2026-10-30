@@ -1,5 +1,6 @@
 import { loadCred } from '../lib/cred.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
+import { assertNetworkUrl, declaredWebSocket } from '../lib/network-policy.mjs'
 // "叫我起床"式监听：只在出现**该回的弹幕**时退出，把消息交给 agent（我）去回。
 // 与 danmaku-auto.mjs 的区别：它不发弹幕，只负责"发现 → 退出 → 让 agent 接手"。
 //
@@ -326,8 +327,11 @@ if (watchMode === 'poll') {
 }
 
 // ---- 可选：WebSocket 模式（实验性，带退避与熔断，避免连接风暴）----
-const hosts = dan.data?.host_list ?? []
-if (!hosts.length) { console.error('取不到弹幕服务器'); process.exit(6) }
+const hosts = (dan.data?.host_list ?? []).filter(host => {
+  try { assertNetworkUrl(`wss://${host.host}:${host.wss_port}/sub`, { websocket: true }); return true }
+  catch (error) { log(error.message); return false }
+})
+if (!hosts.length) { console.error('没有已声明的直播弹幕节点；市场版本已停止 WebSocket 连接，可改用默认轮询模式。'); process.exit(6) }
 let hostIdx = 0
 let attempts = 0
 let consecutiveDead = 0
@@ -341,7 +345,7 @@ async function listenOnce(host, ms) {
     let hb = null
     let t = null
     const done = () => { if (settled) return; settled = true; if (hb) clearInterval(hb); if (t) clearTimeout(t); try { ws.close() } catch {} ; resolve() }
-    const ws = new WebSocket(`wss://${host.host}:${host.wss_port}/sub`)
+    const ws = declaredWebSocket(`wss://${host.host}:${host.wss_port}/sub`)
     try { ws.binaryType = 'arraybuffer' } catch {}
     hb = setInterval(() => { try { ws.send(mk(2, '[object Object]')) } catch {} }, 30000)
     t = setTimeout(done, ms)

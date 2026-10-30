@@ -26,6 +26,13 @@ test('settings retain same-pet identity and bound schedule while rejecting inval
   assert.equal(value.persona,undefined);assert.equal(value.diary.enabled,true);assert.equal(value.night.maxVideos,10);assert.equal(value.listen.commentIntervalSec,60)
   assert.throws(()=>normalizeSettings({night:{windows:[{start:'25:00',end:'26:00'}]}}),/作息/)
 })
+test('market settings reject webhook URLs and modes before saving secrets or configuration',async()=>{
+  const f=await fixture(),before=JSON.stringify(f.cfg),secrets=JSON.stringify([...f.secrets])
+  await assert.rejects(f.controller.api.saveSettings({notify:{type:'webhook',url:'https://unknown.test/hook'}},meta),/市场版本暂未开放 Webhook/)
+  await assert.rejects(f.controller.api.saveSettings({notify:{type:'desktop',url:'https://api.bilibili.com/hook'}},meta),/市场版本暂未开放 Webhook/)
+  assert.equal(JSON.stringify(f.cfg),before);assert.equal(JSON.stringify([...f.secrets]),secrets)
+  await f.controller.dispose()
+})
 test('panel methods reject legacy and other-plugin callers',async()=>{
   const f=await fixture();await assert.rejects(f.controller.api.state({}),/本插件/)
   await assert.rejects(f.controller.api.state({},{sdkCaller:{kind:'plugin',id:'other',context:'panel'}}),/本插件/)

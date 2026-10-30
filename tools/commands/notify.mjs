@@ -1,10 +1,9 @@
-import { guardedFetch as fetch } from '../lib/traffic.mjs'
+import { WEBHOOK_UNAVAILABLE } from '../lib/network-policy.mjs'
 import { dshPath } from '../lib/paths.mjs'
 // 通知分发器 —— 她看完一轮，把摘要送到哪。
 //
 // 2026-10-18 主人重定：方式只有四种（不推送 / 桌面通知 / Webhook / 自定义命令）。
-//   · Webhook **按域名自动适配**飞书/钉钉/企业微信/QQ机器人/WorkBuddy 的报文格式
-//     （它们各自的 JSON 结构不一样 ✗，让用户去记格式不现实 ✓）
+//   · 市场版本未开放 Webhook；旧配置也会明确失败，不向任意 URL 外发。
 //   · 自定义命令：`cmd` = 可执行文件、`args` = 参数数组，消息自动作为**最后一个参数**传入 ✓
 //     （`$MSG` 占位已于 2026-10-18 弃用 ✗ —— 走 shell 有命令注入风险，来源是陌生评论/弹幕）
 //   · 兼容旧配置：stdout / file 仍然可用（不删，免得老配置炸 ✗）
@@ -47,38 +46,6 @@ if (!text) { console.error('用法: node notify.mjs "消息正文" [--title 标�
 const n = config().notify ?? { type: 'none' }
 const type = String(n.type ?? 'none')
 const payload = { title, text, at: new Date().toISOString() }
-
-/** 按域名猜服务，生成它认的报文（飞书 / 钉钉 / 企微 / WorkBuddy / 通用）。 */
-function buildWebhookBody(url, tpl) {
-  const md = tpl === 'markdown'
-  const line = `${title}\n${text}`
-  const u = String(url)
-  if (u.includes('open.feishu.cn') || u.includes('larksuite.com')) {
-    return md
-      ? { msg_type: 'post', content: { post: { zh_cn: { title, content: [[{ tag: 'text', text: line }]] } } } }
-      : { msg_type: 'text', content: { text: line } }
-  }
-  if (u.includes('oapi.dingtalk.com')) {
-    return md
-      ? { msgtype: 'markdown', markdown: { title, text: line } }
-      : { msgtype: 'text', text: { content: line } }
-  }
-  if (u.includes('qyapi.weixin.qq.com')) {
-    return md ? { msgtype: 'markdown', markdown: { content: line } } : { msgtype: 'text', text: { content: line } }
-  }
-  if (u.includes('workbuddy')) return { title, text: line, format: md ? 'markdown' : 'text' }
-  // 通用兜底（含 QQ 机器人常见的 { content } 约定）
-  return { title, text: line, content: line, format: md ? 'markdown' : 'text' }
-}
-
-async function sendWebhook(url, tpl) {
-  const body = buildWebhookBody(url, tpl)
-  if (DRY) { console.log('[dry] webhook 报文：\n' + JSON.stringify(body, null, 2)); return }
-  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-  const raw = await r.text().catch(() => '')
-  if (!r.ok) throw new Error(`webhook HTTP ${r.status} ${raw.slice(0, 160)}`)
-  console.log(`webhook ${r.status} ✓ ${raw.slice(0, 120)}`)
-}
 
 function sendDesktop() {
   if (DRY) { console.log('[dry] 桌面通知：' + String(text).slice(0, 60)); return }
@@ -153,8 +120,7 @@ try {
   } else if (type === 'desktop') {
     sendDesktop()
   } else if (type === 'webhook') {
-    if (!n.url) throw new Error('config.notify.url 没配')
-    await sendWebhook(n.url, n.template)
+    throw new Error(WEBHOOK_UNAVAILABLE)
   } else if (type === 'command') {
     // 2026-10-18：命令不存在（换电脑/插件被删/写死路径失效）→ 直接改用桌面通知 ✓ 别静默失败 ✗
     const c = String(n.cmd ?? '')

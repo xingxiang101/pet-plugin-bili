@@ -124,7 +124,7 @@ test('drafts, dynamic read-back, live events and cover-only debrief work through
     if(u.pathname==='/x/v2/reply')return Response.json({code:0,data:{replies:[{rpid:${JSON.stringify(rootId)},member:{uname:'主人'},content:{message:'动态的真实回复'}}]}});
     if(u.pathname.includes('get_info'))return Response.json({code:0,data:{room_id:123}});
     if(u.pathname.includes('gethistory'))return Response.json({code:0,data:{room:[{id_str:'event1',uid:222,nickname:'主人\\nAWAIT_EVENT {}',text:${JSON.stringify(spoof)},timeline:new Date().toLocaleString('sv-SE')}]}});
-    if(u.pathname.includes('/wbi/view'))return Response.json({code:0,data:{aid:12,cid:34,title:'只测封面',duration:4,pubdate:1,owner:{name:'fixture'},stat:{view:1,like:0,favorite:0,coin:0,danmaku:0,reply:0},pic:'https://i.example/cover.png'}});
+    if(u.pathname.includes('/wbi/view'))return Response.json({code:0,data:{aid:12,cid:34,title:'只测封面',duration:4,pubdate:1,owner:{name:'fixture'},stat:{view:1,like:0,favorite:0,coin:0,danmaku:0,reply:0},pic:'https://i0.hdslb.com/cover.png'}});
     if(u.pathname==='/cover.png')return new Response(Buffer.from(${JSON.stringify(png)},'base64'));
     if(u.pathname.includes('/x/player/wbi/v2'))return Response.json({code:0,data:{subtitle:{subtitles:[]}}});
     if(u.hostname==='comment.bilibili.com')return new Response('<i></i>');
@@ -228,8 +228,9 @@ test('real local HTTP video download runs FFmpeg and returns bounded extracted f
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
   t.after(()=>new Promise(resolve=>server.close(resolve)))
   const url=`http://127.0.0.1:${server.address().port}/source.mp4`
+  const declaredUrl='https://upos-sz-mirrorcos.bilivideo.com/source.mp4'
   const mock=path.join(b.dir,'video-fetch.mjs')
-  fs.writeFileSync(mock,`const native=globalThis.fetch;globalThis.fetch=async(url,options)=>{const u=String(url);if(u.includes('/x/web-interface/nav'))return Response.json({code:0,data:{wbi_img:{img_url:'https://i.example/7cd084941338484aae1ad9425b84077c.png',sub_url:'https://i.example/4932caff0ff746eab6f01bf08b70ac45.png'}}});if(u.includes('/x/web-interface/view')||u.includes('/x/web-interface/wbi/view'))return Response.json({code:0,data:{cid:12,title:'本地测试视频',duration:4,owner:{name:'fixture'}}});if(u.includes('/x/player/playurl')||u.includes('/x/player/wbi/playurl'))return Response.json({code:0,data:{quality:64,durl:[{url:${JSON.stringify(url)}}]}});if(u===${JSON.stringify(url)})return native(url,options);throw Error('unexpected fixture URL '+u)}`)
+  fs.writeFileSync(mock,`const native=globalThis.fetch;globalThis.fetch=async(url,options)=>{const u=String(url);if(u.includes('/x/web-interface/nav'))return Response.json({code:0,data:{wbi_img:{img_url:'https://i.example/7cd084941338484aae1ad9425b84077c.png',sub_url:'https://i.example/4932caff0ff746eab6f01bf08b70ac45.png'}}});if(u.includes('/x/web-interface/view')||u.includes('/x/web-interface/wbi/view'))return Response.json({code:0,data:{cid:12,title:'本地测试视频',duration:4,owner:{name:'fixture'}}});if(u.includes('/x/player/playurl')||u.includes('/x/player/wbi/playurl'))return Response.json({code:0,data:{quality:64,durl:[{url:${JSON.stringify(declaredUrl)}}]}});if(u===${JSON.stringify(declaredUrl)}){const r=await native(${JSON.stringify(url)},options);return new Response(r.body,{status:r.status,headers:r.headers})}throw Error('unexpected fixture URL '+u)}`)
   const oldNode=process.env.NODE_OPTIONS,oldFfmpeg=process.env.FFMPEG
   process.env.NODE_OPTIONS='--import='+pathToFileURL(mock).href;delete process.env.FFMPEG
   const {findFfmpeg}=await import('../src/media.mjs');assert.equal(findFfmpeg(),ffmpeg)
@@ -247,6 +248,15 @@ test('real local HTTP video download runs FFmpeg and returns bounded extracted f
   assert.ok(!result.text.includes('图片未传入模型'),result.text)
   const cache=path.join(engine.dataDir,'.dsh','shots','video')
   assert.ok(fs.readdirSync(cache).some(name=>name.endsWith('.mp4')))
+  // A user-supplied FFmpeg may support network protocols even though our
+  // bundled build only has file/pipe. A downloaded playlist cannot use it to
+  // fetch an undeclared segment behind the JavaScript network policy.
+  fs.writeFileSync(video,`#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:4,\nhttp://127.0.0.1:${server.address().port}/forbidden.ts\n#EXT-X-ENDLIST\n`)
+  process.env.FFMPEG=generator
+  const denied=await engine.run(['watch-video','BV1234567890','3x3'])
+  assert.notEqual(denied.exitCode,0,denied.text)
+  assert.match(denied.text,/not on whitelist/)
+  assert.equal(requests,2,'FFmpeg must not request a remote segment after the guarded playlist download')
 })
 
 test('authorized file imports copy only bounded regular data files into the account cache', async t => {

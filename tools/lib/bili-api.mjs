@@ -1,4 +1,5 @@
 import { guardedFetch as fetch } from './traffic.mjs'
+import { assertNetworkUrl } from './network-policy.mjs'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -109,7 +110,9 @@ function setBan(ms, why) {
 // 说明：读失败仍返回 {code, message} 这种形状，让每个调用方自己决定
 // 「元信息必需」还是「可选」。cookie 和响应正文永远不会进日志。
 export async function apiGet(input, headers = {}, opts = {}) {
-  const url = new URL(input)
+  let url
+  try { url = assertNetworkUrl(input) }
+  catch (error) { return { code: -1, message: error.message } }
   const ttl = opts.ttlMs ?? CACHE_TTL_MS
   const noCache = opts.noCache === true
   // ⚠️ 缓存键必须在【改写路径之前】就算好：
@@ -212,7 +215,7 @@ export async function apiGet(input, headers = {}, opts = {}) {
     }
     return data
   } catch (error) {
-    return { code: -1, message: error.name === 'TimeoutError' ? '请求超时（30 秒）' : error.code === 'BILI_TRAFFIC_PAUSED' ? error.message : '请求失败（网络异常或 WBI 签名密钥无效）' }
+    return { code: -1, message: error.name === 'TimeoutError' ? '请求超时（30 秒）' : ['BILI_TRAFFIC_PAUSED', 'BILI_NETWORK_DENIED'].includes(error.code) ? error.message : '请求失败（网络异常或 WBI 签名密钥无效）' }
   }
 }
 

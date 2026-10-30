@@ -4,6 +4,7 @@ import { parseManualCookie } from '../lib/credential-values.js'
 import { makePlan, completePlan, historyOf, inWindow, windowsOf } from '../tools/lib/night-plan.mjs'
 import { normalizeCommandArgs } from '../tools/lib/cli-args.mjs'
 import { pollDelay } from '../tools/lib/poll-policy.mjs'
+import { WEBHOOK_UNAVAILABLE } from '../tools/lib/network-policy.mjs'
 
 export const PLUGIN_ID = 'bili'
 export const SERVICE = 'bili-control'
@@ -516,10 +517,8 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     saveSettings: wrap(mutate(async input => {
       const stored=normalizeSettings(await engine.getConfig())
       const next = normalizeSettings({ ...stored, ...input, quota:{...stored.quota,...input.quota}, self: cfg.self })
-      if (input.notify?.url) {
-        const url = new URL(String(input.notify.url)); if (url.protocol !== 'https:' || url.username || url.password) throw Error('Webhook 需要 HTTPS 地址。')
-        await pet.secrets.set(notifySecretKey, JSON.stringify({url:url.href})); next.notify.hasWebhook = true
-      } else next.notify.hasWebhook = cfg.notify.hasWebhook
+      if (input.notify?.url || next.notify.type === 'webhook') throw Error(WEBHOOK_UNAVAILABLE)
+      next.notify.hasWebhook = false
       const changed = JSON.stringify(cfg.night)!==JSON.stringify(next.night)
       if (cfg.enabled && !next.enabled || cfg.owner.mid !== next.owner.mid) await pause()
       cfg = next; await engine.setConfig(cfg)

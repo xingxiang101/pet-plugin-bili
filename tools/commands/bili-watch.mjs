@@ -2,6 +2,7 @@ import { loadCred } from '../lib/cred.mjs'
 import { watchOptions } from '../lib/watch-options.mjs'
 import { guardedFetch as fetch } from '../lib/traffic.mjs'
 import { apiGet } from '../lib/bili-api.mjs'
+import { selectMediaUrl } from '../lib/network-policy.mjs'
 // 让 agent 真"看"视频：取直链 → 下载 → ffmpeg 抽帧拼成一张九宫格 → 输出图片路径（再交给 read_image 看）
 //
 // 用法: node bili-watch.mjs <BV号> [列x行，默认 3x3] [outDir]
@@ -39,7 +40,7 @@ console.log(`UP: ${owner}   时长: ${duration}s   cid=${cid}`)
 // 画质实测（2026-10-14）：html5 + qn=32 会被压到 360p（返回 quality=16，界面小字全糊）；
 // 改 platform=pc + qn=80 可拿到 720p（返回 quality=64），依旧是普通 mp4 直链，不必碰 dash。
 const p = await apiGet(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80&fnval=1&platform=pc&high_quality=1`, H)
-const url = p.data?.durl?.[0]?.url
+const url = selectMediaUrl(p.data?.durl?.[0])
 if (!url) { console.error(`没拿到直链（code=${p.code} ${p.message ?? ""}）——有些视频要登录或只有 dash 流`); process.exit(4) }
 const QN = { 16: '360P', 32: '480P', 64: '720P', 80: '1080P' }
 console.log(`实际画质: ${QN[p.data.quality] ?? p.data.quality}`)
@@ -64,7 +65,7 @@ console.log(`已下载: ${mp4}  (${(fs.statSync(mp4).size / 1024 / 1024).toFixed
 // 好处：等间隔会漏掉"只出现一两秒的关键画面"，画面变化点天然落在场景切换处。
 function sceneTimes(file, th) {
   try {
-    const out = execFileSync(FFMPEG, ['-hide_banner', '-i', file, '-vf',
+    const out = execFileSync(FFMPEG, ['-hide_banner', '-protocol_whitelist', 'file,pipe', '-i', file, '-vf',
       `select='gt(scene,${th})',metadata=print:file=-`, '-an', '-f', 'null', '-'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024, timeout: 600_000 })
     const ts = [...out.matchAll(/pts_time:([0-9.]+)/g)].map((m) => Number(m[1]))
@@ -109,10 +110,10 @@ const tmp = path.join(outDir, `.frames-${stamp}`)
 fs.mkdirSync(tmp, { recursive: true })
 try {
   times.forEach((t, i) => {
-    execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-ss', t.toFixed(2), '-i', mp4,
+    execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-ss', t.toFixed(2), '-protocol_whitelist', 'file,pipe', '-i', mp4,
       '-frames:v', '1', '-q:v', '2', path.join(tmp, `f${String(i).padStart(2, '0')}.jpg`)], { stdio: 'inherit' })
   })
-  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', path.join(tmp, 'f%02d.jpg'), '-vf',
+  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', path.join(tmp, 'f%02d.jpg'), '-vf',
     `scale=${TILE}:-1,tile=${cols}x${rows}`, '-frames:v', '1', sheet], { stdio: 'inherit' })
   if (!fs.existsSync(sheet)) throw new Error('九宫格没生成')
   console.log(`\nSHEET: ${sheet}`)
@@ -125,7 +126,7 @@ try {
 // 同样预算下只留字幕带，9 条字幕能全部读清。用的是同一批帧。
 const subs = path.join(outDir, `${bvid}-${stamp}-subs.jpg`)
 try {
-  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', path.join(tmp, 'f%02d.jpg'), '-vf',
+  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', path.join(tmp, 'f%02d.jpg'), '-vf',
     `crop=iw:ih*0.17:0:ih*0.83,scale=1280:-1,tile=1x${N}`, '-frames:v', '1', subs], { stdio: 'inherit' })
   if (fs.existsSync(subs)) console.log(`SUBS:  ${subs}\n（同一批帧的底部字幕带，竖排 ${N} 条）`)
 } catch {

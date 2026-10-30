@@ -75,11 +75,10 @@ test('different writes still obey cooldown and daily caps',async t=>{
  s.advance(120001);await send('two');s.advance(120001);await assert.rejects(send('three'),/预算/)
  assert.equal(s.calls(),2)
 })
-test('unrelated webhooks are not included in Bilibili request budgets',async t=>{
+test('undeclared webhooks are blocked before dispatch or budget changes',async t=>{
  const s=setup(t,{writeDaily:1})
- await s.guard.fetch('https://example.test/webhook',{method:'POST',body:'one'})
- await s.guard.fetch('https://example.test/webhook',{method:'POST',body:'two'})
- assert.equal(s.calls(),2);assert.deepEqual(s.guard.status(),{})
+ await assert.rejects(s.guard.fetch('https://example.test/webhook',{method:'POST',body:'one'}),/未声明/)
+ assert.equal(s.calls(),0);assert.deepEqual(s.guard.status(),{})
 })
 test('corrupt protection state refuses network instead of resetting budgets',async t=>{
  const s=setup(t);fs.writeFileSync(path.join(s.directory,'traffic-state.json'),'{broken')
@@ -139,7 +138,7 @@ test('slow requests have only one active API request across guard instances',asy
 test('every backend fetch caller imports the traffic wrapper',()=>{
  const root=fileURLToPath(new URL('../',import.meta.url))
  for(const p of fs.readdirSync(path.join(root,'tools'),{recursive:true}).filter(p=>p.endsWith('.mjs'))) {
-  if(p.replaceAll('\\','/')==='lib/traffic.mjs')continue
+  if(['lib/traffic.mjs','lib/network-policy.mjs'].includes(p.replaceAll('\\','/')))continue
   const src=fs.readFileSync(path.join(root,'tools',p),'utf8')
   if(/\bfetch\(/.test(src))assert.match(src,/guardedFetch as fetch/,p)
  }

@@ -32,7 +32,7 @@ function fillSettings(value) {
     else input.value=Array.isArray(value)?value.join('\n'):(value??'');
   }
   $('#windows').replaceChildren(); settings.night.windows.forEach(windowRow);
-  $('#webhook-status').textContent=settings.notify.hasWebhook?'已保存 Webhook 地址，留空即可保留。':'尚未配置 Webhook。';
+  $('#webhook-status').textContent='市场版本暂未开放 Webhook 通知，已保存的地址也不会用于外发。';
   dirty=false;$('#dirty').textContent='';
 }
 function readSettings() {

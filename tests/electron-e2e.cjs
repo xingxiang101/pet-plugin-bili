@@ -71,7 +71,7 @@ try{
       if(req.method!=='GET'){res.statusCode=405;return res.end(JSON.stringify({code:-400,message:'test forbids Bili writes'}));}
       if(url.pathname.endsWith('/nav'))return res.end(JSON.stringify({code:0,data:{isLogin:true,mid:111,uname:'本地测试账号',wbi_img:{img_url:'https://i.example/7cd084941338484aae1ad9425b84077c.png',sub_url:'https://i.example/4932caff0ff746eab6f01bf08b70ac45.png'}}}));
       if(url.pathname.endsWith('/view'))return res.end(JSON.stringify({code:0,data:{aid:12,cid:34,title:'本地四秒彩色测试图',duration:4,owner:{name:'本地素材夹具'}}}));
-      if(url.pathname.endsWith('/playurl'))return res.end(JSON.stringify({code:0,data:{quality:64,durl:[{url:'http://127.0.0.1:'+server.address().port+'/media/'+url.searchParams.get('bvid')+'.mp4'}]}}));
+      if(url.pathname.endsWith('/playurl'))return res.end(JSON.stringify({code:0,data:{quality:64,durl:[{url:'https://upos-sz-mirrorcos.bilivideo.com/media/'+url.searchParams.get('bvid')+'.mp4'}]}}));
       res.statusCode=404;return res.end(JSON.stringify({code:-404,message:'unexpected test read'}));
     }
     if(req.url.includes('/api/activation/'))return res.end(JSON.stringify(req.url.includes('/phone/verify')?{phoneProof:'bili-fixture',expiresIn:600}:{environment:'test',accessToken:'fixture.access',refreshToken:'fixture.refresh',expiresIn:3600,user:{uid:101,nickname:'fixture',character:'qiqi'}}));

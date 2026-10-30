@@ -33,11 +33,22 @@
 | `api.bilibili.com`、`passport.bilibili.com`、`api.vc.bilibili.com` | 视频、账号、二维码登录、私信和动态接口 |
 | `api.live.bilibili.com`、`live.bilibili.com` | 直播资料和弹幕接口 |
 | `www.bilibili.com`、`comment.bilibili.com` | 页面内容和视频弹幕材料 |
-| `i0.hdslb.com`、`i1.hdslb.com`、`i2.hdslb.com` | 封面及图片材料 |
+| `i0.hdslb.com`、`i1.hdslb.com`、`i2.hdslb.com` | 封面、图片及人工字幕材料 |
+| `aisubtitle.hdslb.com` | AI 字幕材料 |
+| `upos-sz-estgcos.bilivideo.com`、`upos-sz-mirrorcos.bilivideo.com`、`upos-sz-mirrorcosb.bilivideo.com`、`upos-sz-mirrorcoso1.bilivideo.com`、`upos-sz-mirrorcosov.bilivideo.com` | 视频 CDN |
+| `upos-sz-mirrorali.bilivideo.com`、`upos-sz-mirroralib.bilivideo.com`、`upos-sz-mirroraliov.bilivideo.com` | 视频 CDN |
+| `upos-sz-mirrorhw.bilivideo.com`、`upos-sz-mirrorhwb.bilivideo.com`、`upos-sz-mirrorhwfn.bilivideo.com` | 视频 CDN |
+| `upos-sz-mirror08c.bilivideo.com`、`upos-sz-mirror08h.bilivideo.com`、`upos-sz-mirror08ct.bilivideo.com`、`upos-hz-mirrorakam.akamaized.net` | 视频 CDN |
+| `broadcastlv.chat.bilibili.com`、`broadcast.chat.bilibili.com` | 可选的直播弹幕 WSS 连接，默认仍使用接口轮询 |
 | `api.github.com`、`raw.githubusercontent.com` | 仅在读取视频素材时显式指定 `--repo`，补充该公开仓库的信息和 README |
 
-视频、字幕、图片和直播 WebSocket 的实际地址也会由 B 站接口返回，域名可能随 CDN 节点变化；这些请求由插件通过 Node.js 发出。用户另行配置 HTTPS Webhook 后，通知功能会向该地址发送内容，默认未配置。上述动态地址不通过通配域名权限伪装为已获宿主网络沙箱约束；市场审核需同时检查完整源码、`nodeAccess: true` 及这些用途。
+网络层只接受上述精确域名的标准 HTTPS / WSS 地址。每次跳转都重新检查目标域名；跨域读取跳转不转发 Cookie 或认证头，写操作不自动跟随跳转。图片、字幕和视频 CDN 不接收 B 站 Cookie。插件不会因为某个地址来自 B 站接口就自动放行，也不允许通配域名、本机地址或任意端口。
 
+FFmpeg 只读取已下载的本地文件，在每个 `-i` 前设置 `-protocol_whitelist file,pipe`，不会通过媒体中的远程引用自行联网。该参数按 [FFmpeg 协议选项](https://ffmpeg.org/ffmpeg-protocols.html#Protocol-Options)和[输入参数顺序](https://www.ffmpeg.org/ffmpeg.html#Description)配置；用户指定其他 FFmpeg 时同样适用。
+
+视频下载优先使用接口返回的已声明直链或备用地址。B 站可能返回其他地区的 CDN、字幕或直播节点；这些节点会被拒绝，并显示未声明的域名。若没有可用的已声明视频地址，本次观看失败；直播 WebSocket 无可用节点时可改用默认轮询。维护者需审核新域名并通过市场更新后才能支持，不能保证所有视频或地区节点均可用。
+
+**市场版本暂未开放 Webhook 通知**，设置页不可配置，旧设置和命令行调用也不会向 Webhook 地址外发。可选择系统通知、主人 B 站私信或已配置的本地通知方式。
 市场权限列表还需包含 `services` 中的 `bili-control` 对应项 `service:bili-control`，用于面板与插件控制服务通信。
 
 登录凭据只存宿主 `pet.secrets`，调用时经内存 IPC 传递，不写普通配置、命令行参数、环境变量或日志。配置和日记按宿主账号／宠物上下文及 B 站账号分仓；媒体存于 `~/.desktop-pet-plugin-data/bilibili/` 下的随机目录。不会自动读取旧版私人账本。卸载保留日记和缓存。
