@@ -7,7 +7,7 @@ const HOST=path.resolve(process.env.PET_PLUGIN_HOST_DIR||'');
 if(!process.env.PET_PLUGIN_HOST_DIR)throw Error('Set PET_PLUGIN_HOST_DIR to the actual desktop-pet/demo checkout.');
 const H=require(path.join(HOST,'../tests/e2e-helpers'));
 const {activateButton,activateClosingButton}=require(path.join(HOST,'../tests/e2e/html-card-input'));
-const ROOT=path.resolve(__dirname,'..'),ZIP=path.resolve(process.env.PET_BILI_PLUGIN_ZIP||path.join(ROOT,'dist','bili-0.1.0.zip')),CDP=Number(process.env.PET_BILI_E2E_CDP_PORT)||9488;
+const ROOT=path.resolve(__dirname,'..'),ZIP=path.resolve(process.env.PET_BILI_PLUGIN_ZIP||path.join(ROOT,'dist',`bili-${JSON.parse(fs.readFileSync(path.join(ROOT,'manifest.json'),'utf8')).version}.zip`)),CDP=Number(process.env.PET_BILI_E2E_CDP_PORT)||9488;
 const repro=process.argv.includes('--repro-chat-entry');
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-pet-bili-'));
 const artifact=path.join(ROOT,'artifacts',repro?'chat-entry-repro':'electron-e2e');fs.mkdirSync(artifact,{recursive:true});
