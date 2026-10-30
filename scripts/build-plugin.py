@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import zipfile
 
@@ -78,16 +79,23 @@ for dirname in ('src', 'panel', 'tools', 'bin'):
 # Only pure credential parsing and QR auth are runtime code. The original DSH
 # disk store remains in the repository for upstream regression tests, not ZIPs.
 files.extend(ROOT / 'lib' / name for name in ('auth.js', 'credential-values.js'))
-# Include production dependencies only; dev FFmpeg must never leak into releases.
+# Include only files statically reachable from production library entry points.
+# npm's package-level tree also includes unused CLI dependencies with dynamic
+# module loaders; those are not part of the plugin's QR rendering runtime.
 modules = checked_path(ROOT / 'node_modules', directory=True)
-listing = subprocess.check_output(['npm', 'ls', '--omit=dev', '--all', '--parseable'], cwd=ROOT, text=True).splitlines()[1:]
-for dirname in listing:
-    directory = checked_path(Path(dirname), boundary=modules, directory=True)
-    for parent, directories, names in os.walk(directory, followlinks=False):
-        for child in directories:
-            checked_path(Path(parent) / child, boundary=modules, directory=True)
-        files.extend(checked_path(Path(parent) / child, boundary=modules) for child in names if 'test' not in Path(parent).parts and 'tests' not in Path(parent).parts)
+listing = json.loads(subprocess.check_output(['node', str(ROOT / 'scripts/production-dependencies.cjs')], cwd=ROOT, text=True))
+files.extend(checked_path(Path(filename), boundary=modules) for filename in listing)
 files = sorted(set(checked_path(source) for source in files))
+def check_code(relative, content):
+    if Path(relative).suffix not in ('.js', '.cjs', '.mjs', '.html'):
+        return
+    source = content.decode('utf-8')
+    if re.search(r'\beval\s*\(|\bnew\s+Function\s*\(', source):
+        parser.error('Forbidden code evaluation in install ZIP: ' + relative)
+    for call in re.finditer(r'\brequire\s*\(', source):
+        if not re.match(r'''\s*(['"])([^'"\\\r\n]+)\1\s*\)''', source[call.end():]):
+            parser.error('Dynamic require in install ZIP: ' + relative)
+
 out = ROOT / 'dist'; out.mkdir(exist_ok=True)
 filename = out / ('bili-' + manifest['version'] + '.zip')
 with zipfile.ZipFile(filename, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -100,7 +108,13 @@ with zipfile.ZipFile(filename, 'w', compression=zipfile.ZIP_DEFLATED, compressle
         info = zipfile.ZipInfo(relative, date_time=(2026, 10, 29, 0, 0, 0))
         info.compress_type = zipfile.ZIP_DEFLATED
         info.external_attr = (0o100755 if os.access(source, os.X_OK) else 0o100644) << 16
-        archive.writestr(info, source.read_bytes())
+        content = source.read_bytes()
+        check_code(relative, content)
+        archive.writestr(info, content)
+# Verify the exact serialized archive too, rather than just the dependency graph.
+with zipfile.ZipFile(filename) as archive:
+    for relative in archive.namelist():
+        check_code(relative, archive.read(relative))
 digest = hashlib.sha256(filename.read_bytes()).hexdigest()
 metadata = {'file': filename.name, 'sha256': digest, 'bytes': filename.stat().st_size,
             'nodeAccess': True, 'systemFfmpegRequired': args.system_ffmpeg,

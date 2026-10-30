@@ -13,6 +13,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({name:'bili-build-fixture',version:'0.0.0',private:true}))
   fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify({version:'0.0.0'}))
   fs.copyFileSync(new URL('../scripts/build-plugin.py',import.meta.url),path.join(root,'scripts/build-plugin.py'))
+  fs.copyFileSync(new URL('../scripts/production-dependencies.cjs',import.meta.url),path.join(root,'scripts/production-dependencies.cjs'))
   return {root,run:(...args)=>spawnSync('python3',[path.join(root,'scripts/build-plugin.py'),...args],{encoding:'utf8',cwd:root})}
 }
 function bundle(root,over={}) {
@@ -61,4 +62,56 @@ test('builder rejects unsupported manifest platforms before producing an install
   fs.writeFileSync(path.join(b.root,'manifest.json'),JSON.stringify({version:'0.0.0',platforms:['darwin-arm64']}))
   const result=b.run();assert.equal(result.status,0,result.stderr)
   assert.deepEqual(JSON.parse(result.stdout).platforms,['darwin-arm64'])
+})
+test('builder includes the production library graph and licenses without unused CLI dynamic loaders',t=>{
+  const b=fixture(t);bundle(b.root)
+  const library=path.join(b.root,'node_modules','qr-fixture');fs.mkdirSync(library)
+  fs.writeFileSync(path.join(b.root,'package.json'),JSON.stringify({name:'fixture',version:'0.0.0',dependencies:{'qr-fixture':'1.0.0'}}))
+  fs.writeFileSync(path.join(library,'package.json'),JSON.stringify({name:'qr-fixture',version:'1.0.0',main:'index.js'}))
+  fs.writeFileSync(path.join(library,'LICENSE'),'MIT fixture')
+  fs.writeFileSync(path.join(library,'index.js'),"// require('./nonexistent')\nmodule.exports = require('./render')")
+  fs.writeFileSync(path.join(library,'render.js'),'module.exports = 1')
+  fs.writeFileSync(path.join(library,'unused-cli.js'),'module.exports = require(process.argv[2])')
+  const result=b.run();assert.equal(result.status,0,result.stderr)
+  const inspect=spawnSync('python3',['-c','import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print("\\n".join(z.namelist()))',path.join(b.root,'dist/bili-0.0.0.zip')],{encoding:'utf8'})
+  assert.match(inspect.stdout,/qr-fixture\/render.js/)
+  assert.match(inspect.stdout,/qr-fixture\/LICENSE/)
+  assert.ok(!inspect.stdout.includes('unused-cli.js'))
+  fs.writeFileSync(path.join(library,'render.js'),'module.exports = require(process.argv[2])')
+  const rejected=b.run();assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/Dynamic require/)
+})
+test('builder checks all executable ZIP contents for forbidden loaders and evaluation',t=>{
+  const b=fixture(t);bundle(b.root)
+  fs.mkdirSync(path.join(b.root,'src'))
+  for(const source of ['require(process.argv[2])','eval("1")','new Function("return 1")']){
+    fs.writeFileSync(path.join(b.root,'src','unsafe.js'),source)
+    const result=b.run();assert.notEqual(result.status,0);assert.match(result.stderr,/Dynamic require|Forbidden code evaluation/)
+  }
+})
+test('the packaged production dependency closure generates an actual QR PNG in isolation',t=>{
+  const b=fixture(t),project=path.resolve(new URL('..',import.meta.url).pathname);bundle(b.root)
+  const closure=spawnSync('node',[path.join(project,'scripts/production-dependencies.cjs')],{encoding:'utf8',cwd:project})
+  assert.equal(closure.status,0,closure.stderr)
+  for(const file of JSON.parse(closure.stdout)){
+    const target=path.join(b.root,path.relative(project,file));fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(file,target)
+  }
+  fs.writeFileSync(path.join(b.root,'package.json'),JSON.stringify({name:'fixture',version:'0.0.0',dependencies:{qrcode:'1.5.4'}}))
+  const built=b.run();assert.equal(built.status,0,built.stderr)
+  const extracted=path.join(b.root,'installed')
+  const unzip=spawnSync('python3',['-c','import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])',path.join(b.root,'dist/bili-0.0.0.zip'),extracted],{encoding:'utf8'})
+  assert.equal(unzip.status,0,unzip.stderr)
+  const verify=spawnSync('node',['--input-type=module','-e',`
+    import assert from 'node:assert/strict';
+    import {createRequire} from 'node:module';
+    import path from 'node:path';
+    const root=process.argv[1],load=createRequire(path.join(root,'package.json'));
+    const data=await load('qrcode').toDataURL('https://passport.bilibili.com/scan?key=fixture',{width:220,margin:2});
+    assert.ok(data.startsWith('data:image/png;base64,'));
+    const image=load('pngjs').PNG.sync.read(Buffer.from(data.split(',')[1],'base64'));
+    assert.equal(image.width,220);assert.equal(image.height,220);
+    assert.ok(image.data.some((value,index)=>index%4!==3&&value===0));
+    assert.ok(image.data.some((value,index)=>index%4!==3&&value===255));
+    assert.ok(load.resolve('qrcode').startsWith(root+path.sep));
+  `,fs.realpathSync(extracted)],{encoding:'utf8',cwd:extracted,env:{...process.env,NODE_PATH:''}})
+  assert.equal(verify.status,0,verify.stderr)
 })
