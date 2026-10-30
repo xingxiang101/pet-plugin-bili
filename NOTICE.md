@@ -9,7 +9,7 @@
 | **Bilibili API** | 全部功能都调 B 站公开接口 | 非官方；本项目**不包含** B 站任何代码或数据 |
 | **bilibili-API-collect** | 上游曾参考的社区接口资料 | 当前源码和市场安装包不包含其原文参考文档；不将这些文档声明为本项目的 MIT 代码 |
 | **qrcode / pngjs / dijkstrajs** | 本地生成二维码 PNG | MIT；只包含实际运行入口依赖及各库的许可证，不包含二维码命令行工具及其依赖 |
-| **ffmpeg** | 抽帧 / 看画面（`tools/lib/ffmpeg.mjs` 只是**定位并调用**它） | **LGPL v2.1+**（若用 GPL 构建则为 GPL）。迁移候选随包提供 macOS arm64 的 LGPL 构建，关闭 GPL/nonfree；二进制、许可证、完整固定版本源码归档与摘要在 bin/darwin-arm64，构建脚本在 scripts/build-ffmpeg.sh。源码来自 https://github.com/FFmpeg/FFmpeg/tree/n6.1.1；开发依赖 ffmpeg-static 不随包分发|
+| **ffmpeg** | 抽帧 / 看画面（`tools/lib/ffmpeg.mjs` 只是**定位并调用**它） | **LGPL v2.1+**（若用 GPL 构建则为 GPL）。随包提供 macOS arm64 和 Windows x64 的 LGPL 构建，关闭 GPL/nonfree；二进制、许可证、完整固定版本源码归档与摘要分别在 bin/darwin-arm64 与 bin/win32-x64，构建脚本在 scripts/build-ffmpeg.sh。源码来自 https://github.com/FFmpeg/FFmpeg/tree/n6.1.1；开发依赖 ffmpeg-static 不随包分发|
 | **Node.js** | 运行环境 | MIT |
 
 ## 免责

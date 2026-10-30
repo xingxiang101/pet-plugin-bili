@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--system-ffmpeg', action='store_true', help='Development package requiring a preinstalled FFmpeg')
 args = parser.parse_args()
-manifest = json.loads((ROOT / 'manifest.json').read_text())
+manifest = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))
 def checked_path(source, boundary=ROOT, directory=False):
     source = Path(source).absolute()
     boundary = Path(boundary).resolve(strict=True)
@@ -47,11 +47,14 @@ if not args.system_ffmpeg and declared_platforms is not None and sorted(declared
     parser.error('Manifest platforms differ from the bundled FFmpeg platforms')
 for binary in ffmpeg_files:
     checked_path(binary)
+    expected_name = 'ffmpeg.exe' if binary.parent.name.startswith('win32-') else 'ffmpeg'
+    if binary.name != expected_name:
+        parser.error('Bundled FFmpeg filename differs from its target platform: ' + str(binary))
     for required in ('LICENSE', 'SOURCE.json', 'version.txt'):
         if not (binary.parent / required).is_file():
             parser.error('Missing FFmpeg provenance: ' + str(binary.parent / required))
         checked_path(binary.parent / required)
-    metadata = json.loads((binary.parent / 'SOURCE.json').read_text())
+    metadata = json.loads((binary.parent / 'SOURCE.json').read_text(encoding='utf-8'))
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     if metadata.get('sha256') != digest:
         parser.error('Bundled FFmpeg digest differs from SOURCE.json: ' + str(binary))
@@ -63,7 +66,16 @@ for binary in ffmpeg_files:
         parser.error('FFmpeg source archive digest differs from SOURCE.json')
     if metadata.get('platform') != binary.parent.name or metadata.get('buildScript') != 'scripts/build-ffmpeg.sh':
         parser.error('FFmpeg platform or reproducible build script differs from the packaged assets')
-    version = (binary.parent / 'version.txt').read_text()
+    for dependency in metadata.get('staticDependencies', []):
+        license_name = dependency.get('licenseFile', '')
+        if not license_name:
+            parser.error('Static FFmpeg dependencies must include their license')
+        checked_path(binary.parent / license_name, boundary=binary.parent)
+        if dependency.get('sourceArchive'):
+            source = checked_path(binary.parent / dependency['sourceArchive'], boundary=binary.parent)
+            if hashlib.sha256(source.read_bytes()).hexdigest() != dependency.get('sourceSha256'):
+                parser.error('Static FFmpeg dependency source digest differs from SOURCE.json')
+    version = (binary.parent / 'version.txt').read_text(encoding='utf-8')
     if '--enable-nonfree' in version or '--enable-gpl' in version:
         parser.error('This package configuration requires the prepared LGPL build, not a nonfree/GPL local binary.')
 files = [ROOT / name for name in ('index.cjs', 'manifest.json', 'LICENSE', 'NOTICE.md', 'README.md', 'UPSTREAM-README.md', 'package.json', 'scripts/build-ffmpeg.sh')]
@@ -85,7 +97,7 @@ files.extend(ROOT / 'lib' / name for name in ('auth.js', 'credential-values.js')
 # npm's package-level tree also includes unused CLI dependencies with dynamic
 # module loaders; those are not part of the plugin's QR rendering runtime.
 modules = checked_path(ROOT / 'node_modules', directory=True)
-listing = json.loads(subprocess.check_output(['node', str(ROOT / 'scripts/production-dependencies.cjs')], cwd=ROOT, text=True))
+listing = json.loads(subprocess.check_output(['node', str(ROOT / 'scripts/production-dependencies.cjs')], cwd=ROOT, text=True, encoding='utf-8'))
 files.extend(checked_path(Path(filename), boundary=modules) for filename in listing)
 files = sorted(set(checked_path(source) for source in files))
 def check_code(relative, content):
@@ -108,8 +120,12 @@ with zipfile.ZipFile(filename, 'w', compression=zipfile.ZIP_DEFLATED, compressle
         if relative.endswith(('.log', '.mp4')) or relative == 'package-lock.json':
             continue
         info = zipfile.ZipInfo(relative, date_time=(2026, 10, 29, 0, 0, 0))
+        info.create_system = 3
         info.compress_type = zipfile.ZIP_DEFLATED
-        info.external_attr = (0o100755 if os.access(source, os.X_OK) else 0o100644) << 16
+        # ZIPs assembled on Windows must retain the executable bit for the Mac
+        # binary too. Filesystem X_OK there is not a POSIX permission check.
+        executable = source in ffmpeg_files or relative == 'scripts/build-ffmpeg.sh'
+        info.external_attr = (0o100755 if executable else 0o100644) << 16
         content = source.read_bytes()
         check_code(relative, content)
         archive.writestr(info, content)
@@ -122,5 +138,5 @@ metadata = {'file': filename.name, 'sha256': digest, 'bytes': filename.stat().st
             'nodeAccess': True, 'systemFfmpegRequired': args.system_ffmpeg,
             'platforms': bundled_platforms,
             'status': 'local-candidate-unpublished'}
-(out / 'build.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n')
+(out / 'build.json').write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print(json.dumps(metadata, ensure_ascii=False))

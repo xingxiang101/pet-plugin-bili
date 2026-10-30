@@ -7,7 +7,7 @@ const HOST=path.resolve(process.env.PET_PLUGIN_HOST_DIR||'');
 if(!process.env.PET_PLUGIN_HOST_DIR)throw Error('Set PET_PLUGIN_HOST_DIR to the actual desktop-pet/demo checkout.');
 const H=require(path.join(HOST,'../tests/e2e-helpers'));
 const {activateButton,activateClosingButton}=require(path.join(HOST,'../tests/e2e/html-card-input'));
-const ROOT=path.resolve(__dirname,'..'),ZIP=path.resolve(process.env.PET_BILI_PLUGIN_ZIP||path.join(ROOT,'dist','bili-0.1.0.zip')),CDP=Number(process.env.PET_BILI_E2E_CDP_PORT)||9488;
+const ROOT=path.resolve(__dirname,'..'),ZIP=path.resolve(process.env.PET_BILI_PLUGIN_ZIP||path.join(ROOT,'dist','bili-'+require('../package.json').version+'.zip')),CDP=Number(process.env.PET_BILI_E2E_CDP_PORT)||9488;
 const repro=process.argv.includes('--repro-chat-entry');
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-pet-bili-'));
 const artifact=path.join(ROOT,'artifacts',repro?'chat-entry-repro':'electron-e2e');fs.mkdirSync(artifact,{recursive:true});
@@ -39,7 +39,7 @@ try{
   const target=path.join(profile,'plugins','bili');
   const video=path.join(profile,'fixture-source.mp4');
   const generator=path.join(ROOT,'node_modules','ffmpeg-static',process.platform==='win32'?'ffmpeg.exe':'ffmpeg');
-  execFileSync(generator,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=size=640x360:rate=4','-t','4','-pix_fmt','yuv420p',video],{timeout:30000});
+  execFileSync(generator,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=size=640x360:rate=4','-t','4','-pix_fmt','yuv420p',video],{timeout:30000,windowsHide:true});
   const sourceVideo=fs.readFileSync(video);
   const finishModel=(res,text)=>{if(!res.headersSent)res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: '+JSON.stringify({choices:[{index:0,delta:{role:'assistant',content:text},finish_reason:null}]})+'\n\n');res.write('data: '+JSON.stringify({choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:20,total_tokens:40}})+'\n\n');res.end('data: [DONE]\n\n');};
   fs.writeFileSync(path.join(artifact,'native.jsonl'),'');

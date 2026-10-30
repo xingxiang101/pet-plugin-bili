@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { blockingSubprocessFixture } from './helpers/blocking-subprocess.mjs'
 import { createEngine } from '../src/engine.mjs'
 import { collectImages } from '../src/media.mjs'
 
@@ -11,7 +12,7 @@ function setup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-bili-engine-'))
   const storage = new Map(), secrets = new Map()
   const pet = { storage: { get: k => storage.get(k), set: (k,v) => storage.set(k,v) }, secrets: { get: k => secrets.get(k) } }
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
   return { dir, pet, storage, secrets }
 }
 
@@ -154,7 +155,7 @@ test('media exposes image bytes as bounded data URLs and rejects paths outside t
 test('large local images still compress within model limits with file-only FFmpeg inputs', async t => {
   const { execFileSync } = await import('node:child_process')
   const { fileURLToPath } = await import('node:url')
-  const b=setup(t), generator=fileURLToPath(new URL('../node_modules/ffmpeg-static/ffmpeg',import.meta.url))
+  const b=setup(t), generator=fileURLToPath(new URL('../node_modules/ffmpeg-static/'+(process.platform==='win32'?'ffmpeg.exe':'ffmpeg'),import.meta.url))
   const image=path.join(b.dir,'large-frame.png')
   execFileSync(generator,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=size=1280x720,noise=alls=50:allf=u','-frames:v','1',image],{timeout:30000})
   assert.ok(fs.statSync(image).size>96*1024,'fixture must use the compression path')
@@ -249,14 +250,14 @@ test('dispose while awaiting secret retrieval cannot launch a late background pr
   assert.equal(engine.get(id).result,undefined)
 })
 
-test('cancelling a real CLI also terminates its FFmpeg descendant process', {skip:process.platform==='win32'}, async t => {
-  const b = setup(t), pidFile=path.join(b.dir,'ffmpeg.pid'), fake=path.join(b.dir,'ffmpeg')
-  fs.writeFileSync(fake,`#!/bin/sh\necho $$ > '${pidFile}'\nsleep 60\n`,{mode:0o755})
-  const old=process.env.FFMPEG;process.env.FFMPEG=fake
-  t.after(()=>{if(old===undefined)delete process.env.FFMPEG;else process.env.FFMPEG=old})
+test('cancelling a real CLI also terminates its FFmpeg descendant process', async t => {
+  const b = setup(t), { pidFile, env }=blockingSubprocessFixture(b.dir)
+  const old={FFMPEG:process.env.FFMPEG,NODE_OPTIONS:process.env.NODE_OPTIONS}
+  Object.assign(process.env,env)
+  t.after(()=>{for(const [key,value]of Object.entries(old)){if(value===undefined)delete process.env[key];else process.env[key]=value}})
   const engine=await createEngine({pet:b.pet,dataDir:b.dir});t.after(()=>engine.dispose())
   const id=await engine.start(['deps','--json'])
-  const deadline=Date.now()+5000
+  const deadline=Date.now()+15000
   while(!fs.existsSync(pidFile)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20))
   assert.ok(fs.existsSync(pidFile),'dependency checker must start FFmpeg')
   const pid=Number(fs.readFileSync(pidFile,'utf8').trim())
@@ -271,7 +272,7 @@ test('real local HTTP video download runs FFmpeg and returns bounded extracted f
   const { createServer } = await import('node:http')
   const { execFileSync } = await import('node:child_process')
   const { fileURLToPath } = await import('node:url')
-  const b=setup(t), generator=fileURLToPath(new URL('../node_modules/ffmpeg-static/ffmpeg',import.meta.url)), ffmpeg=fileURLToPath(new URL(`../bin/${process.platform}-${process.arch}/${process.platform==='win32'?'ffmpeg.exe':'ffmpeg'}`,import.meta.url))
+  const b=setup(t), generator=fileURLToPath(new URL('../node_modules/ffmpeg-static/'+(process.platform==='win32'?'ffmpeg.exe':'ffmpeg'),import.meta.url)), ffmpeg=fileURLToPath(new URL(`../bin/${process.platform}-${process.arch}/${process.platform==='win32'?'ffmpeg.exe':'ffmpeg'}`,import.meta.url))
   assert.ok(fs.existsSync(generator),'install the development FFmpeg fixture to generate synthetic videos')
   assert.ok(fs.existsSync(ffmpeg),'prepare the audited bundled FFmpeg before this integration test')
   const video=path.join(b.dir,'source.mp4')
@@ -321,11 +322,9 @@ test('authorized file imports copy only bounded regular data files into the acco
   assert.ok(imported.path.startsWith(engine.dataDir+path.sep))
   assert.equal(fs.readFileSync(imported.path,'utf8'),'{"result":true}')
   await assert.rejects(engine.importFile(path.join(b.dir,'unselected.json')),/未授权/)
-  if(process.platform!=='win32'){
-    const link=path.join(engine.dataDir,'.dsh','link');fs.symlinkSync(b.dir,link,'dir')
-    await assert.rejects(engine.writeState('.dsh/link/escape.json',{}),/符号链接/)
-    await assert.rejects(engine.start(['dynamic-edit','123','../../outside.txt','--go']),/缓存目录/)
-  }
+  const link=path.join(engine.dataDir,'.dsh','link');fs.symlinkSync(b.dir,link,'dir')
+  await assert.rejects(engine.writeState('.dsh/link/escape.json',{}),/符号链接/)
+  await assert.rejects(engine.start(['dynamic-edit','123','../../outside.txt','--go']),/缓存目录/)
 })
 
 test('bundled FFmpeg digest is verified before restoring only its own executable permission', async t => {
@@ -348,15 +347,14 @@ test('bundled FFmpeg digest is verified before restoring only its own executable
   if(process.platform!=='win32')assert.equal(fs.statSync(external).mode&0o111,0)
 })
 
-test('an abrupt engine-parent crash stops a worker blocked in FFmpeg', {skip:process.platform==='win32'}, async t => {
+test('an abrupt engine-parent crash stops a worker blocked in FFmpeg', async t => {
   const {fork}=await import('node:child_process')
-  const b=setup(t), pidFile=path.join(b.dir,'orphan-ffmpeg.pid'), fake=path.join(b.dir,'ffmpeg'), fixture=path.join(b.dir,'parent.mjs')
-  fs.writeFileSync(fake,`#!/bin/sh\necho $$ > '${pidFile}'\nsleep 60\n`,{mode:0o755})
+  const b=setup(t), {pidFile,env}=blockingSubprocessFixture(b.dir), fixture=path.join(b.dir,'parent.mjs')
   const engineUrl=new URL('../src/engine.mjs',import.meta.url).href
   fs.writeFileSync(fixture,`import {createEngine} from ${JSON.stringify(engineUrl)};const m=new Map();const engine=await createEngine({pet:{storage:{get:k=>m.get(k),set:(k,v)=>m.set(k,v)},secrets:{get:()=>null}},dataDir:process.argv[2]});await engine.run(['deps','--json']);`)
-  const parent=fork(fixture,[b.dir],{env:{...process.env,FFMPEG:fake},stdio:'ignore'})
+  const parent=fork(fixture,[b.dir],{env:{...process.env,...env},stdio:'ignore',windowsHide:true})
   t.after(()=>{try{parent.kill('SIGKILL')}catch{}})
-  const deadline=Date.now()+8000
+  const deadline=Date.now()+15000
   while(!fs.existsSync(pidFile)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20))
   assert.ok(fs.existsSync(pidFile),'FFmpeg must be running before simulating the crash')
   const pid=Number(fs.readFileSync(pidFile,'utf8').trim())

@@ -3,6 +3,7 @@ name: Build and prerelease plugin
 on:
   workflow_dispatch:
   push:
+    branches: ['codex/windows']
     tags: ['v*']
 
 permissions:
@@ -17,9 +18,22 @@ defaults:
     shell: bash
 
 jobs:
-  build:
-    runs-on: macos-15
-    timeout-minutes: 35
+  ffmpeg:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            os: macos-15
+            shell: bash
+          - platform: win32-x64
+            os: windows-2022
+            shell: msys2 {0}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     env:
       MACOSX_DEPLOYMENT_TARGET: '11.0'
       TZ: Asia/Shanghai
@@ -27,35 +41,23 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Prepare native Windows toolchain
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
-          node-version: '22'
-          cache: npm
-      - name: Verify platform and version
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            diffutils
+            python
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+      - name: Build audited native FFmpeg
         run: |
           set -euo pipefail
-          test "$(uname -s)" = Darwin
-          test "$(uname -m)" = arm64
-          node --input-type=module <<'JS'
-          import fs from 'node:fs';
-          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) || pkg.version !== manifest.version) {
-            throw new Error('Package and manifest versions must be matching semantic versions');
-          }
-          if (manifest.minHostVersion !== '0.30.0' || JSON.stringify(manifest.platforms) !== '["darwin-arm64"]') {
-            throw new Error('This release requires desktop-pet 0.30.0 and darwin-arm64');
-          }
-          if (process.env.GITHUB_EVENT_NAME === 'push' && process.env.GITHUB_REF_NAME !== 'v' + manifest.version) {
-            throw new Error('Tag and manifest versions differ');
-          }
-          JS
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Download and verify pinned FFmpeg source
-        run: |
-          set -euo pipefail
-          source_archive="$RUNNER_TEMP/ffmpeg-n6.1.1.tar.gz"
+          build_temp="$(mktemp -d)"
+          source_archive="$build_temp/ffmpeg-n6.1.1.tar.gz"
           curl --fail --location --retry 3 --output "$source_archive" \
             https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n6.1.1
           python3 - "$source_archive" <<'PY'
@@ -65,78 +67,69 @@ jobs:
           if hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() != expected:
               raise SystemExit('Official FFmpeg source archive SHA-256 mismatch')
           PY
-          tar -xzf "$source_archive" -C "$RUNNER_TEMP"
-      - name: Build bundled LGPL FFmpeg
-        run: |
-          set -euo pipefail
-          sh scripts/build-ffmpeg.sh "$RUNNER_TEMP/FFmpeg-n6.1.1" \
-            "$GITHUB_WORKSPACE/bin/darwin-arm64" "$RUNNER_TEMP/ffmpeg-n6.1.1.tar.gz"
-          test "$(lipo -archs bin/darwin-arm64/ffmpeg)" = arm64
-          python3 <<'PY'
-          import subprocess
-          lines = subprocess.check_output(['otool', '-L', 'bin/darwin-arm64/ffmpeg'], text=True).splitlines()[1:]
-          for line in lines:
-              library = line.strip().split(' (', 1)[0]
-              if not library.startswith(('/usr/lib/', '/System/Library/')):
-                  raise SystemExit('Bundled FFmpeg has a non-system dynamic dependency: ' + library)
-          PY
-      - name: Run plugin tests
-        run: npm test
-      - name: Build complete install ZIP
-        run: npm run build
-      - name: Verify ZIP and write checksums and provenance
-        run: |
-          set -euo pipefail
-          python3 <<'PY'
-          import hashlib, json, os, zipfile
-          from pathlib import Path
-          manifest = json.loads(Path('manifest.json').read_text())
-          build = json.loads(Path('dist/build.json').read_text())
-          package = Path('dist') / build['file']
-          digest = hashlib.sha256(package.read_bytes()).hexdigest()
-          if (digest != build['sha256'] or package.stat().st_size != build['bytes'] or
-                  build['platforms'] != ['darwin-arm64'] or manifest.get('platforms') != build['platforms'] or
-                  build['systemFfmpegRequired'] or not build['nodeAccess']):
-              raise SystemExit('Final package metadata mismatch')
-          with zipfile.ZipFile(package) as archive:
-              names = set(archive.namelist())
-              required = {manifest['entry']['tool'], manifest['entry']['panel']['src'],
-                          'lib/auth.js', 'lib/credential-values.js', 'node_modules/qrcode/lib/index.js',
-                          'scripts/build-ffmpeg.sh', 'LICENSE', 'NOTICE.md'}
-              prefix = 'bin/darwin-arm64/'
-              required.update(prefix + name for name in ('ffmpeg', 'LICENSE', 'SOURCE.json', 'version.txt', 'ffmpeg-source.tar.gz'))
-              if not required.issubset(names) or json.loads(archive.read('manifest.json')) != manifest:
-                  raise SystemExit('Final ZIP is missing runtime assets or has a different manifest')
-              if any(name.startswith(('artifacts/', 'dist/', 'node_modules/ffmpeg-static/')) for name in names):
-                  raise SystemExit('Development assets leaked into the install ZIP')
-              source = json.loads(archive.read(prefix + 'SOURCE.json'))
-              if (hashlib.sha256(archive.read(prefix + 'ffmpeg')).hexdigest() != source['sha256'] or
-                      hashlib.sha256(archive.read(prefix + source['sourceArchive'])).hexdigest() != source['sourceSha256']):
-                  raise SystemExit('Packaged FFmpeg provenance mismatch')
-              if not archive.getinfo(prefix + 'ffmpeg').external_attr >> 16 & 0o111:
-                  raise SystemExit('Packaged FFmpeg is not executable')
-          package.with_suffix(package.suffix + '.sha256').write_text(digest + '  ' + package.name + '\n')
-          receipt = {'schemaVersion': 1, 'repository': os.environ['GITHUB_REPOSITORY'],
-                     'sourceSha': os.environ['GITHUB_SHA'], 'workflowRunId': os.environ['GITHUB_RUN_ID'],
-                     'pluginId': manifest['id'], 'version': manifest['version'], 'file': package.name,
-                     'sha256': digest, 'bytes': package.stat().st_size, 'platforms': build['platforms'],
-                     'minHostVersion': manifest['minHostVersion'], 'nodeAccess': True,
-                     'status': 'ci-candidate', 'hostCompatibility': 'separate-host-validation-required'}
-          Path('dist/release.json').write_text(json.dumps(receipt, indent=2) + '\n')
-          Path('dist/RELEASE_NOTES.md').write_text(
-              'B 站生活 ' + manifest['version'] + ' — macOS arm64 testing candidate.\n\n'
-              'Built from public source by GitHub Actions, with bundled LGPL FFmpeg and source provenance.\n\n'
-              'Requires a compatible desktop-pet ' + manifest['minHostVersion'] + '+ testing build with '
-              'background AI, completed chat reply delivery and platform constraints. '
-              'This build receipt does not establish host validation or marketplace availability. '
-              'The desktop-pet marketplace registration is reviewed separately.\n\n'
-              'Source commit: `' + os.environ['GITHUB_SHA'] + '`. '
-              'See `release.json` for the package digest and CI run identity.\n')
-          PY
-      - name: Preserve candidate artifacts
+          tar -xzf "$source_archive" -C "$build_temp"
+          zlib_archive=''
+          if test "${{ matrix.platform }}" = win32-x64; then
+            zlib_archive="$build_temp/zlib-1.3.2.tar.xz"
+            curl --fail --location --retry 3 --output "$zlib_archive" \
+              https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz
+          fi
+          sh scripts/build-ffmpeg.sh "$build_temp/FFmpeg-n6.1.1" \
+            "$PWD/bin/${{ matrix.platform }}" "$source_archive" "$zlib_archive"
+          tar -czf "ffmpeg-${{ matrix.platform }}.tar.gz" "bin/${{ matrix.platform }}"
+      - name: Preserve native binary, license and source
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: bili-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ffmpeg-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ffmpeg-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  assemble:
+    needs: ffmpeg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify release identity
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) || pkg.version !== manifest.version) {
+            throw new Error('Package and manifest versions must be matching semantic versions');
+          }
+          if (manifest.minHostVersion !== '0.30.0' || JSON.stringify(manifest.platforms) !== '["darwin-arm64","win32-x64"]') {
+            throw new Error('This release requires desktop-pet 0.30.0 and both native release platforms');
+          }
+          if (process.env.GITHUB_REF.startsWith('refs/tags/') && process.env.GITHUB_REF_NAME !== 'v' + manifest.version) {
+            throw new Error('Tag and manifest versions differ');
+          }
+          JS
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ffmpeg-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-artifacts
+          merge-multiple: true
+      - name: Assemble one complete install ZIP
+        run: |
+          set -euo pipefail
+          tar -xzf native-artifacts/ffmpeg-darwin-arm64.tar.gz
+          tar -xzf native-artifacts/ffmpeg-win32-x64.tar.gz
+          npm ci --ignore-scripts
+          npm run build
+          python3 scripts/verify-release.py --write-receipt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bili-universal-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             dist/*.zip
             dist/*.zip.sha256
@@ -146,9 +139,59 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  native-verify:
+    needs: assemble
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            os: macos-15
+          - platform: win32-x64
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHON: python
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bili-universal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+      - name: Install locked test dependencies
+        run: npm ci
+      - name: Verify the exact ZIP and prepare native tests
+        run: |
+          set -euo pipefail
+          python scripts/verify-release.py --extract "$RUNNER_TEMP/bili-release" --install-test-binaries
+          echo "BILI_RELEASE_DIR=$RUNNER_TEMP/bili-release" >> "$GITHUB_ENV"
+      - name: Run plugin tests on native operating system
+        run: npm test
+      - name: Run installed release download, extraction and chat tests
+        run: npm run test:release:native
+      - name: Preserve native verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bili-native-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release-native-*.json
+          if-no-files-found: error
+          retention-days: 14
+
   prerelease:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: native-verify
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -156,7 +199,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: bili-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          name: bili-universal-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist
       - name: Publish immutable testing assets
         env:

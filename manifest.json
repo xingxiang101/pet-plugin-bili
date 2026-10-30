@@ -2,11 +2,12 @@
   "id": "bili",
   "name": "B 站生活",
   "description": "让当前宠物按作息浏览和理解 B 站视频、记录日记，并处理评论、主人私信、收藏与动态。",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 1,
   "minHostVersion": "0.30.0",
   "platforms": [
-    "darwin-arm64"
+    "darwin-arm64",
+    "win32-x64"
   ],
   "kind": [
     "tool",

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -129,7 +130,7 @@ test('legacy webhook config fails visibly before any transport call, even for a 
   const config = path.join(directory, 'config.json'), hook = path.join(directory, 'fetch.mjs'), marker = path.join(directory, 'network-called')
   fs.writeFileSync(config, JSON.stringify({ notify: { type: 'webhook', url: api } }))
   fs.writeFileSync(hook, `import fs from 'node:fs';globalThis.fetch=async()=>{fs.writeFileSync(${JSON.stringify(marker)},'called');return new Response('{}')}`)
-  const result = spawnSync(process.execPath, ['--import', hook, new URL('../tools/commands/notify.mjs', import.meta.url).pathname, 'test notice'], {
+  const result = spawnSync(process.execPath, ['--import', hook, fileURLToPath(new URL('../tools/commands/notify.mjs', import.meta.url)), 'test notice'], {
     encoding: 'utf8', timeout: 10000, env: { ...process.env, HOME: directory, USERPROFILE: directory, BILI_WHALE_CONFIG: config },
   })
   assert.notEqual(result.status, 0)

@@ -4,6 +4,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {spawnSync} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
+const python=process.env.PYTHON||'python3'
 import {createHash} from 'node:crypto'
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'bili-package-'))
@@ -14,13 +16,13 @@ function fixture(t) {
   fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify({version:'0.0.0'}))
   fs.copyFileSync(new URL('../scripts/build-plugin.py',import.meta.url),path.join(root,'scripts/build-plugin.py'))
   fs.copyFileSync(new URL('../scripts/production-dependencies.cjs',import.meta.url),path.join(root,'scripts/production-dependencies.cjs'))
-  return {root,run:(...args)=>spawnSync('python3',[path.join(root,'scripts/build-plugin.py'),...args],{encoding:'utf8',cwd:root})}
+  return {root,run:(...args)=>spawnSync(python,[path.join(root,'scripts/build-plugin.py'),...args],{encoding:'utf8',cwd:root})}
 }
-function bundle(root,over={}) {
-  const dir=path.join(root,'bin','darwin-arm64');fs.mkdirSync(dir,{recursive:true})
+function bundle(root,over={},platform='darwin-arm64') {
+  const dir=path.join(root,'bin',platform);fs.mkdirSync(dir,{recursive:true})
   const source=Buffer.from('official source fixture'),binary=Buffer.from('binary fixture')
-  for(const [name,value] of [['ffmpeg',binary],['LICENSE','LGPL fixture'],['version.txt','--disable-gpl --disable-nonfree'],['ffmpeg-source.tar.gz',source]])fs.writeFileSync(path.join(dir,name),value)
-  const meta={sha256:createHash('sha256').update(binary).digest('hex'),sourceArchive:'ffmpeg-source.tar.gz',sourceSha256:createHash('sha256').update(source).digest('hex'),platform:'darwin-arm64',buildScript:'scripts/build-ffmpeg.sh',...over}
+  for(const [name,value] of [[platform.startsWith('win32-')?'ffmpeg.exe':'ffmpeg',binary],['LICENSE','LGPL fixture'],['version.txt','--disable-gpl --disable-nonfree'],['ffmpeg-source.tar.gz',source]])fs.writeFileSync(path.join(dir,name),value)
+  const meta={sha256:createHash('sha256').update(binary).digest('hex'),sourceArchive:'ffmpeg-source.tar.gz',sourceSha256:createHash('sha256').update(source).digest('hex'),platform,buildScript:'scripts/build-ffmpeg.sh',...over}
   fs.writeFileSync(path.join(dir,'SOURCE.json'),JSON.stringify(meta));return dir
 }
 test('builder produces a local candidate and includes the reproducible FFmpeg build script',t=>{
@@ -29,14 +31,14 @@ test('builder produces a local candidate and includes the reproducible FFmpeg bu
   fs.writeFileSync(path.join(b.root,'tools/docs/reference.md'),'unused third-party reference')
   const result=b.run();assert.equal(result.status,0,result.stderr)
   assert.match(result.stdout,/local-candidate-unpublished/)
-  const inspect=spawnSync('python3',['-c','import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print("\\n".join(z.namelist()))',path.join(b.root,'dist/bili-0.0.0.zip')],{encoding:'utf8'})
+  const inspect=spawnSync(python,['-c','import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print("\\n".join(z.namelist()))',path.join(b.root,'dist/bili-0.0.0.zip')],{encoding:'utf8'})
   assert.match(inspect.stdout,/scripts\/build-ffmpeg.sh/)
   assert.match(inspect.stdout,/UPSTREAM-README.md/)
   assert.match(inspect.stdout,/lib\/credential-values.js/)
   assert.ok(!inspect.stdout.includes('lib/credentials.js'))
   assert.ok(!inspect.stdout.includes('tools/docs/'))
 })
-test('builder rejects symlink assets, including directory ancestors and dependencies', {skip:process.platform==='win32'},t=>{
+test('builder rejects symlink assets, including directory ancestors and dependencies',t=>{
   const b=fixture(t),outside=fs.mkdtempSync(path.join(os.tmpdir(),'bili-external-'));t.after(()=>fs.rmSync(outside,{recursive:true,force:true}))
   fs.writeFileSync(path.join(outside,'leak.txt'),'must not enter zip')
   fs.symlinkSync(outside,path.join(b.root,'src'),'dir')
@@ -66,6 +68,32 @@ test('builder rejects unsupported manifest platforms before producing an install
   const result=b.run();assert.equal(result.status,0,result.stderr)
   assert.deepEqual(JSON.parse(result.stdout).platforms,['darwin-arm64'])
 })
+test('universal ZIP requires the Windows exe and records portable executable permissions for both platforms',t=>{
+  const b=fixture(t);bundle(b.root);const windows=bundle(b.root,{},'win32-x64')
+  fs.writeFileSync(path.join(b.root,'manifest.json'),JSON.stringify({version:'0.0.0',platforms:['darwin-arm64','win32-x64']}))
+  fs.renameSync(path.join(windows,'ffmpeg.exe'),path.join(windows,'ffmpeg'))
+  const invalid=b.run();assert.notEqual(invalid.status,0);assert.match(invalid.stderr,/filename differs/)
+  fs.renameSync(path.join(windows,'ffmpeg'),path.join(windows,'ffmpeg.exe'))
+  const built=b.run();assert.equal(built.status,0,built.stderr)
+  const inspect=spawnSync(python,['-c','import zipfile,json,sys; z=zipfile.ZipFile(sys.argv[1]); print(json.dumps({i.filename:[i.create_system,(i.external_attr>>16)&511] for i in z.infolist()}))',path.join(b.root,'dist/bili-0.0.0.zip')],{encoding:'utf8'})
+  assert.equal(inspect.status,0,inspect.stderr)
+  const entries=JSON.parse(inspect.stdout)
+  for(const name of ['bin/darwin-arm64/ffmpeg','bin/win32-x64/ffmpeg.exe','scripts/build-ffmpeg.sh'])assert.deepEqual(entries[name],[3,0o755])
+  assert.deepEqual(entries['manifest.json'],[3,0o644])
+})
+test('static FFmpeg dependencies must retain in-package licenses and matching source archives',t=>{
+  const b=fixture(t),dir=bundle(b.root),file=path.join(dir,'SOURCE.json'),meta=JSON.parse(fs.readFileSync(file,'utf8'))
+  const run=dependency=>{meta.staticDependencies=[dependency];fs.writeFileSync(file,JSON.stringify(meta));return b.run()}
+  for(const dependency of [{name:'zlib'}, {name:'zlib',licenseFile:'../LICENSE'}, {name:'zlib',licenseFile:'absent-LICENSE'}]){
+    const rejected=run(dependency);assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/license|escapes|No such file|cannot find/i)
+  }
+  fs.writeFileSync(path.join(dir,'zlib-LICENSE'),'zlib license fixture')
+  fs.writeFileSync(path.join(dir,'zlib-source.tar.gz'),'zlib source fixture')
+  const dependency={name:'zlib',licenseFile:'zlib-LICENSE',sourceArchive:'zlib-source.tar.gz',sourceSha256:'0'.repeat(64)}
+  const rejected=run(dependency);assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/dependency source digest/)
+  dependency.sourceSha256=createHash('sha256').update(fs.readFileSync(path.join(dir,'zlib-source.tar.gz'))).digest('hex')
+  const accepted=run(dependency);assert.equal(accepted.status,0,accepted.stderr)
+})
 test('builder includes the production library graph and licenses without unused CLI dynamic loaders',t=>{
   const b=fixture(t);bundle(b.root)
   const library=path.join(b.root,'node_modules','qr-fixture');fs.mkdirSync(library)
@@ -76,7 +104,7 @@ test('builder includes the production library graph and licenses without unused 
   fs.writeFileSync(path.join(library,'render.js'),'module.exports = 1')
   fs.writeFileSync(path.join(library,'unused-cli.js'),'module.exports = require(process.argv[2])')
   const result=b.run();assert.equal(result.status,0,result.stderr)
-  const inspect=spawnSync('python3',['-c','import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print("\\n".join(z.namelist()))',path.join(b.root,'dist/bili-0.0.0.zip')],{encoding:'utf8'})
+  const inspect=spawnSync(python,['-c','import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print("\\n".join(z.namelist()))',path.join(b.root,'dist/bili-0.0.0.zip')],{encoding:'utf8'})
   assert.match(inspect.stdout,/qr-fixture\/render.js/)
   assert.match(inspect.stdout,/qr-fixture\/LICENSE/)
   assert.ok(!inspect.stdout.includes('unused-cli.js'))
@@ -92,7 +120,7 @@ test('builder checks all executable ZIP contents for forbidden loaders and evalu
   }
 })
 test('the packaged production dependency closure generates an actual QR PNG in isolation',t=>{
-  const b=fixture(t),project=path.resolve(new URL('..',import.meta.url).pathname);bundle(b.root)
+  const b=fixture(t),project=fileURLToPath(new URL('..',import.meta.url));bundle(b.root)
   const closure=spawnSync('node',[path.join(project,'scripts/production-dependencies.cjs')],{encoding:'utf8',cwd:project})
   assert.equal(closure.status,0,closure.stderr)
   for(const file of JSON.parse(closure.stdout)){
@@ -101,7 +129,7 @@ test('the packaged production dependency closure generates an actual QR PNG in i
   fs.writeFileSync(path.join(b.root,'package.json'),JSON.stringify({name:'fixture',version:'0.0.0',dependencies:{qrcode:'1.5.4'}}))
   const built=b.run();assert.equal(built.status,0,built.stderr)
   const extracted=path.join(b.root,'installed')
-  const unzip=spawnSync('python3',['-c','import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])',path.join(b.root,'dist/bili-0.0.0.zip'),extracted],{encoding:'utf8'})
+  const unzip=spawnSync(python,['-c','import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])',path.join(b.root,'dist/bili-0.0.0.zip'),extracted],{encoding:'utf8'})
   assert.equal(unzip.status,0,unzip.stderr)
   const verify=spawnSync('node',['--input-type=module','-e',`
     import assert from 'node:assert/strict';

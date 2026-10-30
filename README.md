@@ -2,7 +2,7 @@
 
 让当前桌宠浏览 B 站、理解视频、记录经历，并按设置处理评论、主人私信、收藏和动态。沿用宿主当前宠物的人设与记忆，不创建独立鲸鱼角色。
 
-本插件基于 `Alterssss/dsh-bili-whale` 迁移。首包仅支持 **macOS Apple 芯片（`darwin-arm64`）**，要求 **桌宠 0.30.0 或以上的兼容测试版**，包含后台 AI、完成回复交付及平台检查接口。宿主测试版通过受邀渠道提供。Release 和桌宠插件市场的实际状态以对应页面为准；源码或 CI 构建成功不代表已经上架。
+本插件基于 `Alterssss/dsh-bili-whale` 迁移。0.1.1 支持 **macOS Apple 芯片（`darwin-arm64`）和 Windows x64（`win32-x64`）**，要求 **桌宠 0.30.0 或以上的兼容测试版**，包含后台 AI、完成回复交付及平台检查接口。宿主测试版通过受邀渠道提供。Release 和桌宠插件市场的实际状态以对应页面为准；源码或 CI 构建成功不代表已经上架。
 
 ## 已迁移的能力
 
@@ -61,7 +61,7 @@ FFmpeg 只读取已下载的本地文件，在每个 `-i` 前设置 `-protocol_w
 
 ## FFmpeg 与安装包
 
-运行时不下载或安装执行程序。首包随包提供 **macOS arm64** 的 FFmpeg n6.1.1 LGPL 构建，包括许可证、完整上游源码归档、源码摘要、配置和构建脚本。插件使用前校验包内二进制摘要；其他平台尚不支持，需各自构建及实机验证后另行发布。`manifest.json` 的 `platforms` 和构建产物的平台列表必须一致。
+运行时不下载或安装执行程序。插件 ZIP 同时提供 **macOS arm64** 的 `ffmpeg` 和 **Windows x64** 的 `ffmpeg.exe`，安装后按当前平台选择。Windows 用户不需要单独安装 FFmpeg 或 Node.js；Node.js 来自桌宠运行环境。两个 FFmpeg n6.1.1 LGPL 构建均保留许可证、完整上游源码归档、源码摘要、配置和构建脚本。使用前校验二进制摘要；其他平台不在本版本声明的支持范围。`manifest.json` 的 `platforms` 和构建产物的平台列表必须一致。
 
 `scripts/build-ffmpeg.sh` 从固定官方源码编译，关闭 GPL、nonfree 和自动依赖探测。开发依赖 `ffmpeg-static` 仅用于测试素材，不进入发布 ZIP，其本机下载产物不能替代随包构建。
 
@@ -71,7 +71,7 @@ FFmpeg 只读取已下载的本地文件，在每个 `-i` 前设置 `-protocol_w
 sh scripts/build-ffmpeg.sh /absolute/FFmpeg-n6.1.1 /absolute/pet-plugin-bili/bin/darwin-arm64 /absolute/ffmpeg-n6.1.1.tar.gz
 ```
 
-脚本校验源码归档 SHA-256，再生成二进制、完整源码归档、许可证与 SOURCE.json；不在用户运行插件时执行。
+脚本校验源码归档 SHA-256，再生成二进制、完整源码归档、许可证与 SOURCE.json；不在用户运行插件时执行。Windows 构建在 Windows CI 的 MSYS2 环境运行同一脚本，输出到 `bin/win32-x64`。使用正式产物前，CI 分别在 macOS 和 Windows 上调用实际 ZIP 内的二进制验收。
 
 ## 开发和验证
 
@@ -79,12 +79,15 @@ sh scripts/build-ffmpeg.sh /absolute/FFmpeg-n6.1.1 /absolute/pet-plugin-bili/bin
 npm ci
 npm test
 npm run build
+BILI_RELEASE_DIR=/absolute/path/to/verified-release npm run test:release:native
 PET_PLUGIN_HOST_DIR=/absolute/path/to/desktop-pet/demo npm run test:electron
 ```
 
 `dist/build.json` 记录 ZIP 的 SHA-256、大小和平台。ZIP 只包含新入口、面板、引擎、复用工具和生产依赖，旧 DSH 入口与旧调度器不会加载。
 
 CI 候选、带标签的测试 Release 和桌宠插件市场登记的顺序及审核要求见 [docs/RELEASING.md](docs/RELEASING.md)。测试 Release 可以作为市场安装来源；是否上架取决于官方登记审核和最终安装验收。
+
+`test:release:native` 必须指向已校验 SHA-256 并解包的发行 ZIP，验证包内二维码依赖、原生 FFmpeg、真实本地 HTTP 下载、抽帧、后台分析接口与单次聊天交付。测试包含空格和中文缓存路径，不允许回退系统 FFmpeg。完整聊天界面通过私有宿主的 `test:electron` 验证。
 
 自动验证使用隔离宿主资料、本地模拟账号／模型和合成视频，不发送真实 B 站评论、私信或动态。真实 B 站扫码、观看效果及发送后回读仍需单独验收，不能用模拟测试替代。
 

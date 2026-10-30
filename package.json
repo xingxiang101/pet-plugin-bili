@@ -1,6 +1,6 @@
 {
   "name": "pet-plugin-bili",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "让当前宠物自主浏览 B 站、理解视频、记录日记，并按设置处理互动。",
   "keywords": [
     "dsh",
@@ -12,15 +12,16 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "test:upstream": "node --test tests/*.test.mjs",
+    "test": "node tests/run-unit.cjs",
+    "test:upstream": "npm test",
     "test:migration": "npm run test:engine && npm run test:controller && npm run test:build",
     "build": "python3 scripts/build-plugin.py",
     "test:engine": "node --test tests/engine.test.mjs",
     "test:controller": "node --test tests/controller.test.mjs",
     "test:electron": "node tests/electron-e2e.cjs",
     "test:build": "node --test tests/build.test.mjs",
-    "test:delivery": "npm test && npm run build && npm run test:electron"
+    "test:delivery": "npm test && npm run build && npm run test:release:native && npm run test:electron",
+    "test:release:native": "node tests/release-native.mjs"
   },
   "main": "index.cjs",
   "exports": {
