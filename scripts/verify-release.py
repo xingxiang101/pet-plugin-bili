@@ -126,7 +126,7 @@ if args.write_receipt:
         'One install ZIP includes native LGPL FFmpeg binaries, their pinned original source, '
         'Windows static dependency source/licenses, and build provenance. Native plugin checks run on both platforms.\n\n'
         'Requires a compatible desktop-pet ' + manifest['minHostVersion'] + '+ testing build with '
-        'background AI and completed chat reply delivery. Host validation and desktop-pet marketplace '
+        'background AI and the generic pet.pet.notify message channel. Results and actionable statuses share one chat, bubble and hub delivery path. Routine polling remains silent. Host validation and desktop-pet marketplace '
         'registration are separate from this plugin build receipt.\n\n'
         'Source commit: `' + os.environ['GITHUB_SHA'] + '`. '
         'See `release.json` for the package digest and CI run identity.\n', encoding='utf-8')
