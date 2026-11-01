@@ -146,7 +146,14 @@ try{
   const sendChat=async text=>{await H.cdp(chat,'Emulation.setFocusEmulationEnabled',{enabled:true});await H.evalIn(chat,'document.querySelector(".cp-input input").focus();document.querySelector(".cp-input input").select()');await H.cdp(chat,'Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});await H.cdp(chat,'Input.insertText',{text});await activateButton(chat,'.cp-input input',{capture:false});submittedMessages.push(text);};
   const startWatch=async(targetValue,question)=>{const text=targetValue===WATCH?CHAT_MAIN:targetValue===BARE?BARE_LINK:'帮我看看 https://www.bilibili.com/video/'+targetValue+'/ 。'+question;await sendChat(text);return wait(()=>chatTasks.get(JSON.stringify(text)),'watch task returned through the actual chat tool result');};
   const verifyChat=async label=>{
-    await wait(()=>H.evalIn(chat,`[...document.querySelectorAll('.cp-bubble-pet')].filter(node=>node.textContent===${JSON.stringify(REPLY)}).length===1`),label+' chat DOM');
+    await wait(async()=>{
+      if(await H.evalIn(chat,`[...document.querySelectorAll('.cp-bubble-pet')].filter(node=>node.textContent===${JSON.stringify(REPLY)}).length===1`))return true;
+      // Extra status records can push the original watch into an older page.
+      // Exercise the normal scroll-to-load path before checking its full DOM.
+      const scroll=await H.evalIn(chat,`(()=>{if(!document.querySelector('.cp-loadmore'))return null;const r=document.querySelector('.cp-scroll').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+      if(scroll)await H.cdp(chat,'Input.dispatchMouseEvent',{type:'mouseWheel',...scroll,deltaY:-10000,deltaX:0});
+      return false;
+    },label+' chat DOM');
     const history=await H.evalIn(chat,'chatAPI.getChatHistory({page:0,perPage:100})');
     check(history.messages.filter(item=>item.role==='pet'&&item.text===REPLY).length===1,label+' keeps the complete assistant reply exactly once');
     check(!history.messages.some(item=>item.role==='user'&&(item.text===QUESTION||item.text===REPLY||item.text===BARE_REPLY)),label+' does not fabricate an owner message');
@@ -315,8 +322,8 @@ try{
   await H.evalIn(app.pet,'window.petAPI.openHub()');const hub=await H.findReadyTarget(CDP,'/hub.html','hub');
   await wait(()=>H.evalIn(hub,`!!document.querySelector('[data-activity-id="${draftNotice.id}"] .activity-main')`),'draft status in hub');
   await H.captureScreenshot(hub,path.join(artifact,'status-hub.png'));
-  await activateClosingButton(CDP,hub,`[data-activity-id="${draftNotice.id}"] .activity-main`);chat=await H.findTarget(CDP,'/chat.html');
-  await wait(()=>H.evalIn(chat,`document.body.innerText.includes(${JSON.stringify(draftNotice.summary)})`),'draft notice opens its chat record');
+  await activateClosingButton(CDP,hub,`[data-activity-id="${draftNotice.id}"] .activity-main`);chat=await H.findReadyTarget(CDP,'/chat.html','chatAPI');
+  await wait(()=>H.evalIn(chat,`document.body?.innerText.includes(${JSON.stringify(draftNotice.summary)})`),'draft notice opens its chat record');
   await H.evalIn(panel,"pet.services.invoke('bili-control','saveSettings',[{enabled:false}])");
   check(statusRows().filter(row=>row.summary===draftNotice.summary).length===1,'draft notification is unique');
   check(!draftNotice.summary.includes('待审核夹具正文'),'notification excludes private draft text');
