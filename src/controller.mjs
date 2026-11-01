@@ -1,3 +1,4 @@
+import { createStatusNotices, taskLabel } from './status-notices.mjs'
 import { randomUUID, createHash } from 'node:crypto'
 import { QrAuth, verifyAccount } from '../lib/auth.js'
 import { parseManualCookie } from '../lib/credential-values.js'
@@ -165,6 +166,12 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     saveTail = task.catch(() => {})
     return task
   }
+  const notices=createStatusNotices({pet,scope:{scopeId,revision:scopeRevision},check:checkGeneration,getState:()=>state,save:target=>persist(target,storageKey)})
+  const announce=(id,text,local=generation)=>notices.publish(id,text,local)
+  async function listenerFailure(kind,st,local) {
+    st.noticeId ||= 'listener:'+kind+':'+randomUUID()
+    if(st.failures>=3)await announce(st.noticeId,'B 站生活：'+({comment:'评论和 @ 消息',dm:'主人私信',live:'直播消息'}[kind]||'后台')+'监听连续失败，暂时无法及时处理。请在插件面板检查账号连接和请求保护。',local)
+  }
   const auth = authFactory({ save: saveCredential })
   async function runAI(prompt, localGeneration, images = [], timeoutMs = 600000) {
     if (!pet.ai?.start) throw Error('当前宿主尚不支持插件后台 AI，请更新测试宿主。')
@@ -236,8 +243,11 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     const job = serial.then(async () => {
       if (stopped || task.status === 'cancelled' || localGeneration !== generation) { task.status = 'cancelled';if(kind==='manual'){try{const id=JSON.parse(input).id;manualJobs.delete(id);engine.cancel(id)}catch{};forgetWatchRequest(task.id)} await saveTask(); return }
       busy = true; task.status = 'running'; const taskDeadline=Date.now()+30*60*1000
+      let previousDrafts=new Set()
       try {
         await saveTask()
+        previousDrafts=new Set((await engine.readState('.bili-ai/pending-replies.json'))?.items?.map(item=>item.id)||[])
+        await checkGeneration(localGeneration)
         let material;try{material=JSON.parse(input)}catch{}
         let eventInput=input,seedImages=[]
         if(kind==='manual'){
@@ -295,13 +305,20 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
           task.stage='delivery';await saveTask();await checkGeneration(localGeneration)
           if(task.status==='cancelled')throw Error('任务已取消。')
           currentAI=finalAI.id
-          try{task.delivery=kind==='night'?(await pet.ai.share?.(finalAI.id)?'shared':'unavailable'):(await pet.ai.deliver?.(finalAI.id)?'chat':'unavailable')}catch{task.delivery='unavailable'}
+          try{task.delivery=await pet.ai.share?.(finalAI.id)?'shared':kind==='manual'&&await pet.ai.deliver?.(finalAI.id)?'chat':'unavailable'}catch{task.delivery='unavailable'}
           finally{if(currentAI===finalAI.id)currentAI=null}
           await checkGeneration(localGeneration)
           if(task.status==='cancelled'||manualJobs.get(material?.id)?.cancelled)throw Error('任务已取消。')
-          if(task.source==='watch'&&task.delivery==='unavailable')try{await pet.pet?.bubble?.('视频回复已经整理好，但暂时没能送进聊天。可以问我这条观看任务的结果。')}catch{}
+          if(task.delivery!=='shared')task.notification=await announce('task:'+task.id+':delivery','B 站生活：'+taskLabel(task)+'结果已整理好，但完整通知暂未送达。请在插件面板查看任务结果。',localGeneration)
         }
         task.status = 'completed'; task.stage='completed';task.finishedAt = new Date(now()).toISOString()
+        if(kind!=='skip'){
+          const drafts=(await engine.readState('.bili-ai/pending-replies.json'))?.items||[]
+          await checkGeneration(localGeneration)
+          const fresh=drafts.filter(item=>!previousDrafts.has(item.id))
+          if(fresh.length)task.notification=await announce('task:'+task.id+':review','B 站生活：有 '+fresh.length+' 条回复草稿等待你审核。请打开插件面板的「待审回复」，批准后才会发布。',localGeneration)
+          else if(['comment','dm','live'].includes(kind))task.notification=await announce('task:'+task.id+':completed','B 站生活：本次'+taskLabel(task)+'已结束。处理详情和实际发送回执可在插件面板查看。',localGeneration)
+        }
         if (kind === 'dm' && receipt) {
           const ack = await engine.run(['dm-await','--ack',receipt], { signal: aborter.signal })
           if (ack.exitCode && ack.exitCode !== 0) throw Error('回复任务已完成，但私信确认失败；请先核查结果。')
@@ -310,7 +327,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
         task.status = task.status==='cancelled'||stopped || localGeneration !== generation ? 'cancelled' : 'failed'
         task.error = task.source==='watch'?'本次观看未完成，请稍后重试；如仍失败，可在 B 站生活面板检查连接。':cleanError(error)
         await taskLog(`${kind} 任务未完成，保留交付记录，不自动重放。`).catch(()=>{})
-        if(task.source==='watch'&&task.status==='failed')try{await checkGeneration(localGeneration);await pet.pet?.bubble?.('这次视频没能看完。可以在聊天问我任务进度，或稍后重试。')}catch{}
+        if(task.status==='failed')try{task.notification=await announce('task:'+task.id+':failed','B 站生活：这次'+taskLabel(task)+'未完成。请在插件面板检查连接和任务状态；涉及发送时先核查回执，避免重复发送。',localGeneration)}catch{}
       }
       finally { if(kind==='manual'){try{const id=JSON.parse(input).id;manualJobs.delete(id);if(task.status!=='completed')engine.cancel(id)}catch{};forgetWatchRequest(task.id)} if(activePolicy)for(const [id]of activePolicy.jobs)engine.cancel(id);activePolicy=null; busy = false; await saveTask() }
     })
@@ -345,8 +362,8 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
       const hit = lastJson(result.text)
       if (!hit || typeof hit.hit !== 'boolean') throw Error('私信返回无效结果。')
       if (hit.hit) { if (!hit.receipt || String(hit.mid) !== cfg.owner.mid) throw Error('私信身份不匹配。'); enqueue('dm', JSON.stringify(hit), hit.receipt) }
-      st.failures = 0
-    } catch { if(localGeneration!==generation)return; st.failures++; await log('私信监听失败，已退避；不会确认未完成消息。') }
+      st.failures = 0;delete st.noticeId
+    } catch { if(localGeneration!==generation)return; st.failures++; await log('私信监听失败，已退避；不会确认未完成消息。');await listenerFailure('dm',st,localGeneration) }
   }
   async function commentTick() {
     const localGeneration = generation
@@ -360,7 +377,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
       await checkGeneration(localGeneration)
       const inbox = result.items ? result : JSON.parse(result.text)
       const all = Array.isArray(inbox.items) ? inbox.items : []
-      if (!st.since) { st.since = Math.floor(now()/1000); st.ids = []; st.failures = 0; return }
+      if (!st.since) { st.since = Math.floor(now()/1000); st.ids = []; st.failures = 0;delete st.noticeId; return }
       const fresh = all.filter(x => (cfg.listen.scope !== 'reply' || x.kind === 'reply') && (Number(x.t) > st.since || Number(x.t) === st.since && !(st.ids || []).includes(`${x.kind}:${x.id}`)))
       if (fresh.length) {
         fresh.sort((a,b) => Number(a.t)-Number(b.t))
@@ -374,8 +391,8 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
         const previousSince=st.since, previousIds=st.ids||[]
         st.since = Math.max(...batch.map(x=>Number(x.t))); st.ids = [...new Set([...(previousSince===st.since?previousIds:[]),...batch.filter(x=>Number(x.t)===st.since).map(x=>`${x.kind}:${x.id}`)])]
       }
-      st.failures = 0
-    } catch { if(localGeneration!==generation)return; st.failures++; await log('评论监听失败，已退避；已保留消息游标。') }
+      st.failures = 0;delete st.noticeId
+    } catch { if(localGeneration!==generation)return; st.failures++; await log('评论监听失败，已退避；已保留消息游标。');await listenerFailure('comment',st,localGeneration) }
   }
   async function liveTick() {
     const localGeneration = generation
@@ -383,12 +400,16 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     if (!cfg.enabled || !cfg.listen.live || !cfg.listen.liveRoom || !await credentials()) { if (liveId) engine.cancel(liveId); liveId = null; return }
     await checkGeneration(localGeneration)
     if (liveId && liveKey !== key) { engine.cancel(liveId); liveId = null }
+    const st = state.listeners.live ||= { failures: 0 }
+    try {
     if (liveId) {
       const job = await engine.get(liveId)
       await checkGeneration(localGeneration)
       if (!job) { liveId = null; return }
       if (!TERMINAL.has(job.status)) return
       liveId = null
+      if (job.status !== 'completed' || /AWAIT_DEAD/.test(job.result?.text||'')) throw Error('直播监听失败。')
+      st.failures=0;delete st.noticeId
       if (job.status === 'completed') {
         const line=String(job.result?.text||'').split('\n').find(line=>line.startsWith('AWAIT_EVENT '))
         let event;try{event=JSON.parse(line?.slice(12))}catch{}
@@ -400,18 +421,32 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     const started = await engine.start(args)
     if(stopped||localGeneration!==generation){engine.cancel(started);return}
     liveId = started; liveKey = key
+    } catch {
+      if(stopped||localGeneration!==generation)return
+      liveId=null;st.failures++
+      await listenerFailure('live',st,localGeneration)
+    }
+  }
+  async function recoveryNotices(local) {
+    for(const task of state.tasks.filter(item=>item.status==='interrupted'))
+      await announce('task:'+task.id+':interrupted','B 站生活：之前的'+taskLabel(task)+'已中断，结果尚未确认。请在插件面板核查；不会自动重复执行。',local)
+    if(!cfg.enabled)return
+    const st=state.listeners.account||={}
+    if(await credentials()){delete st.noticeId;return}
+    st.noticeId||='account:'+randomUUID()
+    await announce(st.noticeId,'B 站生活：自主活动已开启，但尚未连接 B 站账号。请在插件面板连接账号后继续。',local)
   }
   let ticking = false
   async function tick() {
     if (stopped || ticking) return
     ticking = true
     const localGeneration = generation
-    try { await checkGeneration(localGeneration); await nightTick(); await checkGeneration(localGeneration); await dmTick(); await checkGeneration(localGeneration); await commentTick(); await checkGeneration(localGeneration); await liveTick(); await checkGeneration(localGeneration); await persist() } finally { ticking = false }
+    try { await checkGeneration(localGeneration); await recoveryNotices(localGeneration); await nightTick(); await checkGeneration(localGeneration); await dmTick(); await checkGeneration(localGeneration); await commentTick(); await checkGeneration(localGeneration); await liveTick(); await checkGeneration(localGeneration); await notices.flush(localGeneration); await persist() } finally { ticking = false }
   }
   async function getState() {
     const cred = await credentials()
     return { account: cred ? { mid: String(cred.mid || ''), name: String(cred.name || '') } : null, enabled: cfg.enabled,
-      aiAvailable: typeof pet.ai?.start === 'function', chatDeliveryAvailable:typeof pet.ai?.deliver==='function', proactiveSharingAvailable:typeof pet.ai?.share==='function', busy, tasks: state.tasks.slice(-12).map(task=>{const item=clone(task);if(typeof item.text==='string')item.text=item.text.slice(0,700);if(typeof item.request==='string')item.request=item.request.slice(0,240);return item}), logs: state.logs.slice(-20).map(item=>({...item,message:item.message.slice(0,160)})),
+      aiAvailable: typeof pet.ai?.start === 'function', chatDeliveryAvailable:typeof pet.ai?.deliver==='function', proactiveSharingAvailable:typeof pet.ai?.share==='function', statusNotificationsAvailable:typeof pet.pet?.notify==='function', busy, tasks: state.tasks.slice(-12).map(task=>{const item=clone(task);if(typeof item.text==='string')item.text=item.text.slice(0,700);if(typeof item.request==='string')item.request=item.request.slice(0,240);return item}), logs: state.logs.slice(-20).map(item=>({...item,message:item.message.slice(0,160)})),
       listeners: clone(state.listeners), live: liveId ? 'running' : 'stopped' }
   }
   function authorize(meta) { if (meta?.sdkCaller?.kind !== 'plugin' || meta.sdkCaller.id !== PLUGIN_ID || meta.sdkCaller.context !== 'panel') throw Error('此操作只允许本插件设置面板调用。') }
@@ -482,7 +517,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
         } catch {
           job.status='failed';job.error=attempted?'发送结果未完全确认，草稿与尝试记录已保留；请先回读核查，勿直接重发。':'预检未完成，草稿已保留。'
           if(!attempted)delete reviewState.receipts[receipt]
-        } finally {job.updatedAt=now();await saveReview()}
+        } finally {job.updatedAt=now();await saveReview();try{job.notification=await announce('review:'+idJob,job.status==='completed'?'B 站生活：你批准的回复已发布，并已回读确认。':attempted?'B 站生活：这条回复的发送结果尚未确认，草稿和尝试记录已保留。请先核查原评论，避免重复发送。':'B 站生活：回复发布预检未完成，草稿已保留。请在插件面板查看。',localGeneration)}catch{}}
       })().catch(()=>{})
       return {id:idJob,status:'running',draftId:id}
     } finally { reviewBusy = false }
@@ -513,12 +548,16 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
   })
   async function cancelTask(input) {
     const task=state.tasks.find(x=>x.id===input.id);if(!task)return false
+    const localGeneration=generation,wasActive=!TERMINAL.has(task.status)
     const running=task.status==='running'
     if(task.jobId)cancelJob(task.jobId)
     if(task.status==='queued')task.status='cancelled'
     if(running&&activePolicy?.task===task){task.status='cancelled';for(const [id]of activePolicy.jobs)engine.cancel(id);const aiId=currentAI||task.aiTaskId;if(aiId)await pet.ai.cancel(aiId).catch(()=>{})}
     else if(running&&!task.jobId)await pause()
-    await persist();return true
+    await persist()
+    // A chat tool cannot wait for a notification queued behind that same chat.
+    if(wasActive)void announce('task:'+task.id+':cancelled','B 站生活：已停止这次'+taskLabel(task)+'。已经发出的内容不会撤回，可在插件面板核查。',localGeneration).then(status=>{task.notification=status}).catch(()=>{})
+    return true
   }
   function watchSnapshot(task) {
     const result={taskId:task.id,target:task.target,status:task.status,stage:task.stage||'queued'}
