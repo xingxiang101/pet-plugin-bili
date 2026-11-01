@@ -59,7 +59,13 @@ async function shot(page,name){await H.captureScreenshot(page,path.join(artifact
  const selector='[data-market-id="bili"] [data-action="market-install"]';await wait(()=>H.evalIn(settings,`!!document.querySelector(${JSON.stringify(selector)})`),'market install button');
  await activateButton(settings,selector);await wait(()=>H.evalIn(settings,'!!document.querySelector("[data-action=market-perm-confirm]")'),'market permissions');
  await shot(settings,'market-permissions');await activateButton(settings,'[data-action="market-perm-confirm"]');
- const dialog=await H.findReadyTarget(port,'dialog.html','dialogAPI',1260);await shot(dialog,'host-permissions');
+ await wait(async()=>{
+  const error=await H.evalIn(settings,'document.querySelector("[data-testid=plugin-market-feedback][role=alert]")?.textContent');
+  assert(!error,'market installation failed: '+error);
+  const pages=await(await fetch('http://127.0.0.1:'+port+'/json')).json();
+  return pages.some(page=>page.url.includes('dialog.html'));
+ },'market download and host permissions',630000);
+ const dialog=await H.findReadyTarget(port,'dialog.html','dialogAPI');await shot(dialog,'host-permissions');
  await activateClosingButton(port,dialog,'.btn-primary');
  await wait(()=>H.evalIn(settings,"settings.pluginsList().then(ps=>ps.some(p=>p.id==='bili'&&p.status==='active'))"),'plugin active');
  const target=path.join(profile,'plugins','bili');
