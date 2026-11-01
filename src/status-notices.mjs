@@ -1,17 +1,24 @@
-// Only fixed, user-facing summaries belong here. Never forward model transcripts,
-// network errors, credentials or private journal contents to the host notice.
+// One outbox for final user-facing results and fixed status summaries.
+// Never forward intermediate transcripts, raw errors, credentials or private drafts.
 export function createStatusNotices({pet,scope,check,getState,save}) {
   let tail=Promise.resolve()
+  const active=new Set()
   const persist=async(state,revision)=>{try{await save(state)}catch{await check(revision)}}
   const send=async(entry,id,revision,state)=>{
     await check(revision)
-    if(entry.status==='delivered'||entry.status==='bubble-only')return entry.status
+    if(entry.status!=='pending')return entry.status
     try {
       if(typeof pet.pet?.notify==='function') {
-        const accepted=await pet.pet.notify({id,text:entry.text,scope})
+        let accepted
+        active.add(id)
+        try{accepted=await pet.pet.notify({id,text:entry.text,scope})}finally{active.delete(id)}
         await check(revision)
-        if(accepted)entry.status='delivered'
-      } else if(!entry.fallback) {
+        if(accepted&&entry.status==='pending'){
+          entry.status='delivered'
+          if(entry.taskId){const task=state.tasks.find(task=>task.id===entry.taskId);if(task)task.delivery='shared'}
+          delete entry.text
+        }
+      } else if(!entry.taskId&&!entry.fallback) {
         entry.fallback=true
         await pet.pet?.bubble?.(entry.text)
         await check(revision)
@@ -22,12 +29,26 @@ export function createStatusNotices({pet,scope,check,getState,save}) {
     return entry.status
   }
   const queue=work=>{const result=tail.then(work);tail=result.catch(()=>{});return result}
+  // Cancellation bypasses the send queue: a chat tool must not wait behind
+  // the message it is trying to cancel. The host does not retract committed rows.
+  const cancel=async id=>{
+    const state=getState(),entry=state.notices?.[id]
+    if(!entry||entry.status!=='pending')return false
+    entry.status='cancelled';delete entry.text
+    const pending=typeof pet.pet?.notify==='function'?pet.pet.notify({id,scope,cancel:true}).catch(()=>false):Promise.resolve(false)
+    try{await save(state)}catch{}
+    return pending
+  }
   return {
-    publish(id,text,revision) {
+    cancel,
+    // Lifecycle changes stop in-flight RPCs but retain completed, unsent
+    // results for a later retry in this same account's outbox.
+    cancelPending:()=>Promise.all([...active].map(id=>pet.pet.notify({id,scope,cancel:true}).catch(()=>false))),
+    publish(id,text,revision,taskId) {
       return queue(async()=>{
         await check(revision)
         const state=getState();state.notices||={}
-        const entry=state.notices[id]||={text,status:'pending'}
+        const entry=state.notices[id]||={text,status:'pending',...(taskId?{taskId}:{})}
         // Persist before delivery so a transient SDK failure can be retried
         // without repeating the Bilibili action or requesting another model.
         await persist(state,revision)

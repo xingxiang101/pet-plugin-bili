@@ -17,7 +17,8 @@ async function fixture(options={}){
   let cfg=normalizeSettings(options.config||{}),authOptions,scope={scopeId:'scope-a',revision:1},starts=0
   if(options.logged!==false)secrets.set('bili.credentials.test',JSON.stringify({sessdata:'test-login-value-123456789',bili_jct:'a'.repeat(32),mid:'42',name:'pet-bili'}))
   const engine={dataDir:path.resolve('isolated'),getConfig:async()=>cfg,setConfig:async value=>{cfg=copy(value)},readState:async p=>files.get(p),writeState:async(p,value)=>{files.set(p,copy(value))},accountChanged:()=>{calls.push(['accountChanged'])},dispose:()=>{calls.push(['dispose'])},cancel:id=>{calls.push(['cancel',id]);return true},start:async args=>{calls.push(args);const id='job-'+calls.length;jobs.set(id,{id,status:'completed',result:{text:'done',images:[],exitCode:0}});return id},get:id=>jobs.get(id),run:async args=>{calls.push(args);if(options.run)return options.run(args);return{text:args[0]==='dm-await'?JSON.stringify({hit:false}):args[0]==='inbox'?JSON.stringify({items:[]}):'done',images:[],exitCode:0}}}
-  const pet={storage:{get:async(k,fallback)=>data.has(k)?copy(data.get(k)):fallback,set:async(k,v)=>{data.set(k,copy(v))}},secrets:{get:async k=>secrets.get(k),set:async(k,v)=>{secrets.set(k,v)},delete:async k=>secrets.delete(k)},profile:{getScope:async()=>({...scope})},ai:{start:async(prompt,opts)=>{starts++;prompts.push({prompt,opts});return{id:'ai-'+starts,status:'running'}},get:async()=>options.pendingAI?{status:'running'}:{status:'completed',text:'完成真实任务'},cancel:async id=>{calls.push(['ai.cancel',id]);options.pendingAI=false;return true},share:async id=>{shares.push(id);return true},deliver:async id=>{deliveries.push(id);return true}},tools:{register:spec=>tools.set(spec.name,{...spec,handler:(input,context={source:'host'})=>spec.handler(input,context)})},scheduler:{every:async()=> 'timer-1',cancel:async id=>{calls.push(['timer.cancel',id])}}}
+  const pet={storage:{get:async(k,fallback)=>data.has(k)?copy(data.get(k)):fallback,set:async(k,v)=>{data.set(k,copy(v))}},secrets:{get:async k=>secrets.get(k),set:async(k,v)=>{secrets.set(k,v)},delete:async k=>secrets.delete(k)},profile:{getScope:async()=>({...scope})},ai:{start:async(prompt,opts)=>{starts++;prompts.push({prompt,opts});return{id:'ai-'+starts,status:'running'}},get:async()=>options.pendingAI?{status:'running'}:{status:'completed',text:'完成真实任务'},cancel:async id=>{calls.push(['ai.cancel',id]);options.pendingAI=false;return true},},tools:{register:spec=>tools.set(spec.name,{...spec,handler:(input,context={source:'host'})=>spec.handler(input,context)})},scheduler:{every:async()=> 'timer-1',cancel:async id=>{calls.push(['timer.cancel',id])}}}
+  pet.pet={notify:async value=>{if(value.cancel)return false;if(value.id.endsWith(':result'))shares.push(value);return true}}
   const controller=await createController({pet,engine,scopeKey:'test',scopeId:'scope-a',scopeRevision:1,now:options.now||Date.now,random:()=>0,verify:options.verify||(async()=>({mid:'42',name:'pet-bili'})),authFactory:opts=>{authOptions=opts;return{start:async()=>({id:'qr',status:'waiting',image:'data:image/png;base64,AA=='}),poll:async()=>({status:'waiting'}),cancel:()=>({status:'cancelled'}),dispose:()=>{}}}})
   controller.registerTools()
   return{controller,engine,pet,data,secrets,files,jobs,tools,calls,prompts,deliveries,shares,get starts(){return starts},setScope:value=>{scope=value},get auth(){return authOptions},get cfg(){return cfg}}
@@ -305,13 +306,13 @@ test('traffic resolution remains an explicit panel audit action',async()=>{
  const f=await fixture();await assert.rejects(f.tools.get('bili_command').handler({args:['traffic','resolve','--id','test','--outcome','not-sent','--go']},{source:'chat'}),/核查/);await f.controller.dispose()
 })
 test('manual long video command really resumes with images and returns through current pet',async()=>{
- const f=await fixture(),image='data:image/png;base64,QUFB',spoken=[];f.pet.pet={speak:async text=>spoken.push(text)}
+ const f=await fixture(),image='data:image/png;base64,QUFB',spoken=[];f.pet.pet={...f.pet.pet,speak:async text=>spoken.push(text)}
  f.engine.start=async()=>{const id='manual-video';f.jobs.set(id,{id,status:'running'});return id}
  const result=await f.tools.get('bili_command').handler({args:['watch-video','BV1fixture'],request:'看这个视频并告诉我画面讲了什么'},{source:'chat'});const id=JSON.parse(result.text).id
  await new Promise(resolve=>setTimeout(resolve,20));assert.equal(f.starts,0)
  f.jobs.set(id,{id,status:'completed',result:{text:'真实媒体结果',images:[image],exitCode:0}})
  await until(()=>f.starts===1);assert.equal(f.prompts[0].opts.images[0],image);assert.match(f.prompts[0].prompt,/看这个视频并告诉我画面/)
- await until(()=>f.shares.length===1);assert.deepEqual(f.shares,['ai-1']);assert.equal(spoken.length,0);assert.equal((await f.controller.getState()).tasks[0].status,'completed');await f.controller.dispose()
+ await until(()=>f.shares.length===1);assert.deepEqual(f.shares.map(value=>value.text),['完成真实任务']);assert.equal(spoken.length,0);assert.equal((await f.controller.getState()).tasks[0].status,'completed');await f.controller.dispose()
 })
 test('manual tool result already returned to chat is not analyzed twice',async()=>{
  const f=await fixture();const result=await f.tools.get('bili_command').handler({args:['video','BV1fixture']},{source:'chat'});const id=JSON.parse(result.text).id
@@ -382,11 +383,11 @@ test('chat watch refuses aborted entry, missing login and old SDK without starti
  assert.equal(f.calls.length,0);await f.controller.dispose()
  const g=await fixture({logged:false})
  await assert.rejects(g.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'}),/连接/);assert.equal(g.calls.length,0);await g.controller.dispose()
- const h=await fixture();delete h.pet.ai.deliver
+ const h=await fixture();delete h.pet.pet.notify
  await assert.rejects(h.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'}),/更新测试宿主/);assert.equal(h.calls.length,0);await h.controller.dispose()
 })
 test('failed chat watch reports real failure locally without another model request or false reply',async()=>{
- const f=await fixture(),bubbles=[];f.pet.pet={bubble:async text=>bubbles.push(text)}
+ const f=await fixture(),bubbles=[];f.pet.pet={notify:async value=>{if(value.cancel)return false;if(value.id.endsWith(':result'))f.shares.push(value);else bubbles.push(value.text);return true}}
  const accepted=JSON.parse((await f.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'})).text)
  await until(()=>bubbles.length===1)
  const result=JSON.parse((await f.tools.get('bili_watch_task').handler({id:accepted.taskId},{source:'chat'})).text)
@@ -396,7 +397,7 @@ test('failed chat watch reports real failure locally without another model reque
 test('watch state write failures release busy state, media and in-flight deduplication before retry',async()=>{
  for(const permanent of [false,true]){
   const f=await fixture(),bubbles=[],watch=f.tools.get('bili_watch_video').handler,save=f.pet.storage.set;let fail=true,count=0
-  f.pet.pet={bubble:async text=>bubbles.push(text)}
+  f.pet.pet={notify:async value=>{if(value.cancel)return false;if(value.id.endsWith(':result'))f.shares.push(value);else bubbles.push(value.text);return true}}
   f.pet.storage.set=async(key,value)=>{if(fail&&value.tasks.some(task=>task.status==='running')){if(!permanent)fail=false;throw Error('forced-storage-failure')}if(permanent&&fail)throw Error('forced-storage-failure');return save(key,value)}
   f.engine.start=async args=>{const id='storage-'+(++count);f.calls.push(args);f.jobs.set(id,count===1?{id,status:'running'}:{id,status:'completed',result:{text:'重试的真实素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return id}
   const accepted=JSON.parse((await watch({target:'BV1234567890'},{source:'chat'})).text)
@@ -409,7 +410,7 @@ test('watch state write failures release busy state, media and in-flight dedupli
  }
 })
 test('cancelled or stale chat watch never emits a failure bubble into another scope',async()=>{
- const f=await fixture(),bubbles=[];f.pet.pet={bubble:async text=>bubbles.push(text)}
+ const f=await fixture(),bubbles=[];f.pet.pet={notify:async value=>{if(value.cancel)return false;if(value.id.endsWith(':result'))f.shares.push(value);else bubbles.push(value.text);return true}}
  f.engine.start=async()=>{f.jobs.set('scope-media',{id:'scope-media',status:'running'});return'scope-media'}
  const accepted=JSON.parse((await f.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'})).text)
  await until(async()=>(await f.controller.getState()).tasks[0].stage==='media')
@@ -417,7 +418,7 @@ test('cancelled or stale chat watch never emits a failure bubble into another sc
  await until(async()=>(await f.controller.getState()).tasks[0].status==='failed')
  assert.deepEqual(bubbles,[]);assert.deepEqual(f.shares,[])
  await assert.rejects(f.tools.get('bili_watch_task').handler({id:accepted.taskId},{source:'chat'}),/身份已切换/);await f.controller.dispose()
- const g=await fixture(),cancelBubbles=[];g.pet.pet={bubble:async text=>cancelBubbles.push(text)}
+ const g=await fixture(),cancelBubbles=[];g.pet.pet={notify:async value=>{if(!value.cancel)cancelBubbles.push(value.text);return true}}
  g.engine.start=async()=>{g.jobs.set('cancel-media',{id:'cancel-media',status:'running'});return'cancel-media'}
  const task=JSON.parse((await g.tools.get('bili_watch_video').handler({target:'BV1234567890'},{source:'chat'})).text)
  await g.tools.get('bili_watch_task').handler({id:task.taskId,cancel:true},{source:'chat'})
@@ -428,7 +429,7 @@ test('watch service checks caller, login, SDK and queue before starting fixed me
  await assert.rejects(f.controller.api.watchVideo({target:'BV1234567890'}),/本插件/)
  await assert.rejects(f.controller.api.watchVideo({target:'BV1234567890'},meta),/先连接/);assert.equal(f.calls.length,0)
  await f.controller.dispose()
- const g=await fixture();delete g.pet.ai.deliver
+ const g=await fixture();delete g.pet.pet.notify
  await assert.rejects(g.controller.api.watchVideo({target:'BV1234567890'},meta),/更新测试宿主/);assert.equal(g.calls.length,0);await g.controller.dispose()
  const h=await fixture({pendingAI:true});for(let i=0;i<8;i++)h.controller.enqueue('skip','fixture')
  await assert.rejects(h.controller.api.watchVideo({target:'BV1234567890'},meta),/队列已满/);assert.ok(!h.calls.some(args=>args[0]==='watch-video'));await h.controller.dispose()
@@ -441,7 +442,7 @@ test('watch uses real images with no autonomous activity or owner UID and delive
  await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='completed')
  assert.deepEqual(f.calls[0],['watch-video','BV1234567890','3x3','--uniform','--tile','640']);assert.equal(f.starts,1)
  assert.deepEqual(f.prompts[0].opts.tools,[]);assert.deepEqual(f.prompts[0].opts.images,[image]);assert.match(f.prompts[0].prompt,/最喜欢哪个画面/)
- assert.deepEqual(f.shares,['ai-1']);const result=await f.controller.api.aiTask({id:task.id},meta);assert.equal(result.delivery,'shared');assert.equal(result.text,'完成真实任务')
+ assert.deepEqual(f.shares.map(value=>value.text),['完成真实任务']);const result=await f.controller.api.aiTask({id:task.id},meta);assert.equal(result.delivery,'shared');assert.equal(result.text,'完成真实任务')
  for(const file of ['.dsh/whale-diary.md','.dsh/whale-diary-private.md'])assert.match(f.files.get(file),/完成真实任务/)
  await f.controller.dispose()
 })
@@ -474,7 +475,7 @@ test('canceling one watch during media wait preserves the next queued watch',asy
  assert.equal((await f.controller.api.aiTask({id:second.id},meta)).status,'queued');assert.equal(f.starts,0)
  await f.controller.api.cancelTask({id:first.id},meta)
  await until(async()=>(await f.controller.api.aiTask({id:second.id},meta)).status==='completed')
- assert.equal((await f.controller.api.aiTask({id:first.id},meta)).status,'cancelled');assert.equal(f.starts,1);assert.deepEqual(f.shares,['ai-1'])
+ assert.equal((await f.controller.api.aiTask({id:first.id},meta)).status,'cancelled');assert.equal(f.starts,1);assert.deepEqual(f.shares.map(value=>value.text),['完成真实任务'])
  assert.ok(f.calls.some(args=>args[0]==='cancel'&&args[1]===first.jobId));assert.ok(!f.calls.some(args=>args[0]==='accountChanged'||args[0]==='cancel'&&args[1]===second.jobId));await f.controller.dispose()
 })
 test('empty final AI output is a failed watch rather than a delivered reply',async()=>{
@@ -490,23 +491,23 @@ test('manual multi-stage workflow delivers only its final completed AI task',asy
  const started=await f.tools.get('bili_command').handler({args:['video','BV1234567890'],request:'读取后告诉我看法'},{source:'chat'})
  const jobId=JSON.parse(started.text).id
  await until(async()=>(await f.controller.getState()).tasks.find(task=>task.jobId===jobId)?.status==='completed')
- assert.equal(f.starts,2);assert.deepEqual(f.shares,['ai-2']);assert.equal((await f.controller.getState()).tasks[0].text,'完整最终答复');await f.controller.dispose()
+ assert.equal(f.starts,2);assert.deepEqual(f.shares.map(value=>value.text),['完整最终答复']);assert.equal((await f.controller.getState()).tasks[0].text,'完整最终答复');await f.controller.dispose()
 })
 test('delivery failure keeps full paged fallback and journal failure does not repeat AI',async()=>{
  const f=await fixture(),text='完整回复。'.repeat(5000)
- f.pet.ai.get=async()=>({status:'completed',text});f.pet.ai.share=async id=>{f.shares.push(id);throw Error('chat unavailable')}
+ f.pet.ai.get=async()=>({status:'completed',text});f.pet.pet.notify=async value=>{if(value.id.endsWith(':result'))f.shares.push(value);throw Error('chat unavailable')}
  f.engine.writeState=async()=>{throw Error('disk unavailable')}
  f.engine.start=async()=>{f.jobs.set('watch',{id:'watch',status:'completed',result:{text:'素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return'watch'}
  const task=await f.controller.api.watchVideo({target:'BV1234567890'},meta)
  await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='completed')
  let result,actual='',offset=0;do{result=await f.controller.api.aiTask({id:task.id,offset},meta);actual+=result.text;offset=result.next}while(offset!==null)
- assert.equal(actual,text);assert.equal(result.delivery,'unavailable');assert.equal(result.journal,'unavailable');assert.equal(f.starts,1);assert.deepEqual(f.shares,['ai-1']);assert.equal((await f.controller.getState()).tasks[0].text.length,700);await f.controller.dispose()
+ assert.equal(actual,text);assert.equal(result.delivery,'unavailable');assert.equal(result.journal,'unavailable');assert.equal(f.starts,1);assert.deepEqual(f.shares.map(value=>value.text),[text]);assert.equal((await f.controller.getState()).tasks[0].text.length,700);await f.controller.dispose()
 })
-test('cancel while final delivery waits revokes the completed AI task before chat commits',async()=>{
+test('cancel while final delivery waits cancels the generic message before chat commits',async()=>{
  const f=await fixture();let delivering=false,release,committed=false,revoked=false
  f.engine.start=async()=>{f.jobs.set('watch',{id:'watch',status:'completed',result:{text:'素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return'watch'}
- f.pet.ai.share=async id=>{delivering=true;await new Promise(resolve=>{release=resolve});if(revoked)throw Error('revoked before commit');committed=true;return true}
- f.pet.ai.cancel=async id=>{f.calls.push(['ai.cancel',id]);if(delivering){revoked=true;release()}return true}
+ f.pet.pet.notify=async value=>{if(value.cancel){revoked=true;release();return true}if(!value.id.endsWith(':result'))return true;delivering=true;await new Promise(resolve=>{release=resolve});if(revoked)throw Error('revoked before commit');committed=true;return true}
+ f.pet.ai.cancel=async id=>{f.calls.push(['ai.cancel',id]);return true}
  const task=await f.controller.api.watchVideo({target:'BV1234567890'},meta);await until(()=>delivering)
  await f.controller.api.cancelTask({id:task.id},meta)
  await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='cancelled')
@@ -554,7 +555,7 @@ test('legacy night tool does not execute old clock or consume controlled schedul
 })
 
 test('cancel after media completes during grace interval never starts continuation AI',async()=>{
- const f=await fixture(),spoken=[];f.pet.pet={speak:async text=>spoken.push(text)}
+ const f=await fixture(),spoken=[];f.pet.pet={...f.pet.pet,speak:async text=>spoken.push(text)}
  const result=await f.tools.get('bili_command').handler({args:['video','BV1fixture']},{source:'chat'});const id=JSON.parse(result.text).id
  await until(async()=>(await f.controller.getState()).tasks[0]?.status==='running');await f.controller.api.cancelJob({id},meta)
  await new Promise(resolve=>setTimeout(resolve,1100));assert.equal(f.starts,0);assert.deepEqual(spoken,[]);assert.equal((await f.controller.getState()).tasks[0].status,'cancelled');await f.controller.dispose()
@@ -574,7 +575,7 @@ test('scheduled tick shares one final result independently of external sharing a
 test('skip, cancelled, failed and old-host tasks do not claim a proactive share',async()=>{
  for(const mode of ['skip','cancel','failed','old-host']){
   const f=await fixture({pendingAI:mode==='cancel'})
-  if(mode==='old-host')delete f.pet.ai.share
+  if(mode==='old-host')delete f.pet.pet.notify
   if(mode==='failed')f.pet.ai.get=async()=>({status:'failed',error:'provider error'})
   const task=f.controller.enqueue(mode==='skip'?'skip':'night','{}')
   if(mode==='cancel'){await until(()=>f.starts===1);await f.controller.api.cancelTask({id:task.id},meta)}
@@ -613,7 +614,7 @@ test('repeated listener failures notify once until recovery and empty inboxes re
 
 test('chat cancellation returns while its notification waits for the main chat queue',async()=>{
  const f=await fixture({pendingAI:true});let release,noticed=false;
- f.pet.pet={notify:async()=>{noticed=true;await new Promise(resolve=>{release=resolve});return true}};
+ f.pet.pet={notify:async value=>{if(value.cancel)return false;noticed=true;await new Promise(resolve=>{release=resolve});return true}};
  const task=f.controller.enqueue('comment','[]');await until(()=>f.starts===1);
  let returned=false;const pending=f.controller.api.cancelTask({id:task.id},meta).then(()=>{returned=true});
  await until(()=>noticed);await new Promise(resolve=>setTimeout(resolve,25));
@@ -643,3 +644,25 @@ test('restart reports interrupted work once without replay and missing login onl
  const empty=await fixture({logged:false});empty.pet.pet=f.pet.pet;await empty.controller.tick();assert.equal(notices.length,1);
  await empty.controller.api.saveSettings({enabled:true},meta);await empty.controller.tick();await empty.controller.tick();assert.equal(notices.length,2);assert.match(notices[1].text,/连接.*账号/);await empty.controller.dispose();
 });
+
+test('full generic result retries after restart without AI or old delivery APIs',async()=>{
+ const f=await fixture(),text='海'.repeat(128000),messages=[]
+ f.pet.ai.get=async()=>({status:'completed',text})
+ f.pet.pet.notify=async value=>{if(value.id.endsWith(':result')){messages.push(value);throw Error('busy')}return true}
+ const task=f.controller.enqueue('night','full result')
+ await until(async()=>(await f.controller.getState()).tasks[0]?.status==='completed')
+ assert.equal(messages.length,1);assert.equal(messages[0].text,text)
+ await f.controller.dispose()
+ const data=new Map([...f.data].map(([key,value])=>[key,copy(value)]))
+ const restarted=await fixture({data});restarted.pet.pet.notify=async value=>{messages.push(value);return true}
+ await restarted.controller.tick()
+ assert.equal(restarted.starts,0);assert.equal(messages.length,2);assert.deepEqual(messages[0],messages[1]);assert.equal((await restarted.controller.getState()).tasks.find(t=>t.id===task.id).delivery,'shared')
+ await restarted.controller.tick();assert.equal(messages.length,2);await restarted.controller.dispose()
+})
+test('old host status fallback remains a temporary bubble and never invokes AI delivery',async()=>{
+ const f=await fixture(),bubbles=[];f.pet.pet={bubble:async text=>bubbles.push(text)}
+ f.pet.ai.share=f.pet.ai.deliver=()=>{throw Error('legacy delivery must not be called')}
+ f.controller.enqueue('night','old host')
+ await until(async()=>(await f.controller.getState()).tasks[0]?.status==='completed')
+ assert.equal(bubbles.length,1);assert.match(bubbles[0],/插件面板/);assert.equal((await f.controller.getState()).tasks[0].delivery,'unavailable');await f.controller.dispose()
+})

@@ -123,7 +123,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
   let stopped = false, serial = Promise.resolve(), busy = false, currentAI = null, generation = 0, liveId = null, liveKey = '', saveTail = Promise.resolve()
   let state = await pet.storage.get(storageKey, {}) || {}
   state.receipts ||= {}; state.tasks ||= []; state.logs ||= []; state.listeners ||= {}
-  for (const task of state.tasks) if (!TERMINAL.has(task.status)) { task.status = 'interrupted'; task.error = '应用已重启，任务结果未确认；未自动重放。' }
+  for (const task of state.tasks) if (!TERMINAL.has(task.status)) { task.status = 'interrupted'; task.error = '应用已重启，任务结果未确认；未自动重放。';const pending=state.notices?.['task:'+task.id+':result'];if(pending?.status==='pending'){pending.status='cancelled';delete pending.text} }
   let timer = null
   const aborter = new AbortController()
   const persist = (target = state, key = storageKey) => pet.storage.set(key, clone(target))
@@ -131,7 +131,9 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
   const checkGeneration = async local => { await checkScope(); if (local !== generation) throw Error('账号或任务已变化。') }
   const log = (message) => { state.logs.push({ at: new Date(now()).toISOString(), message: String(message).slice(0, 400) }); state.logs = state.logs.slice(-60); return persist() }
   const pause = async () => {
+    const cancelling=notices.cancelPending()
     generation++
+    await cancelling
     const changed = engine.accountChanged?.()
     if (currentAI) await pet.ai.cancel(currentAI).catch(() => {})
     currentAI = null
@@ -305,7 +307,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
           task.stage='delivery';await saveTask();await checkGeneration(localGeneration)
           if(task.status==='cancelled')throw Error('任务已取消。')
           currentAI=finalAI.id
-          try{task.delivery=await pet.ai.share?.(finalAI.id)?'shared':kind==='manual'&&await pet.ai.deliver?.(finalAI.id)?'chat':'unavailable'}catch{task.delivery='unavailable'}
+          try{task.delivery=await notices.publish('task:'+task.id+':result',task.text,localGeneration,task.id)==='delivered'?'shared':'unavailable'}catch{task.delivery='unavailable'}
           finally{if(currentAI===finalAI.id)currentAI=null}
           await checkGeneration(localGeneration)
           if(task.status==='cancelled'||manualJobs.get(material?.id)?.cancelled)throw Error('任务已取消。')
@@ -446,7 +448,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
   async function getState() {
     const cred = await credentials()
     return { account: cred ? { mid: String(cred.mid || ''), name: String(cred.name || '') } : null, enabled: cfg.enabled,
-      aiAvailable: typeof pet.ai?.start === 'function', chatDeliveryAvailable:typeof pet.ai?.deliver==='function', proactiveSharingAvailable:typeof pet.ai?.share==='function', statusNotificationsAvailable:typeof pet.pet?.notify==='function', busy, tasks: state.tasks.slice(-12).map(task=>{const item=clone(task);if(typeof item.text==='string')item.text=item.text.slice(0,700);if(typeof item.request==='string')item.request=item.request.slice(0,240);return item}), logs: state.logs.slice(-20).map(item=>({...item,message:item.message.slice(0,160)})),
+      aiAvailable: typeof pet.ai?.start === 'function', chatDeliveryAvailable:typeof pet.pet?.notify==='function', proactiveSharingAvailable:typeof pet.pet?.notify==='function', statusNotificationsAvailable:typeof pet.pet?.notify==='function', busy, tasks: state.tasks.slice(-12).map(task=>{const item=clone(task);if(typeof item.text==='string')item.text=item.text.slice(0,700);if(typeof item.request==='string')item.request=item.request.slice(0,240);return item}), logs: state.logs.slice(-20).map(item=>({...item,message:item.message.slice(0,160)})),
       listeners: clone(state.listeners), live: liveId ? 'running' : 'stopped' }
   }
   function authorize(meta) { if (meta?.sdkCaller?.kind !== 'plugin' || meta.sdkCaller.id !== PLUGIN_ID || meta.sdkCaller.context !== 'panel') throw Error('此操作只允许本插件设置面板调用。') }
@@ -471,7 +473,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     if (!granted(policy.settings) || !granted(cfg)) throw Error('此对外操作未获本次任务的对应开关授权，请在面板核对后明确执行。')
   }
   const nightStatus=()=>({managed:true,enabled:cfg.enabled,windows:cfg.night.windows,listeners:state.listeners,next:'作息由插件控制器托管；在B站生活面板保存作息或点击现在浏览一次。旧clock/mark不会执行，避免重复调度或吞掉唤醒。'})
-  const cancelJob=id=>{const result=engine.cancel(id);const entry=manualJobs.get(id);if(entry)entry.cancelled=true;const task=state.tasks.find(task=>task.jobId===id);if(task&&!TERMINAL.has(task.status)){task.status='cancelled';if(activePolicy?.task===task&&currentAI)pet.ai.cancel(currentAI).catch(()=>{})}return result}
+  const cancelJob=id=>{const result=engine.cancel(id);const entry=manualJobs.get(id);if(entry)entry.cancelled=true;const task=state.tasks.find(task=>task.jobId===id);if(task&&!TERMINAL.has(task.status)){task.status='cancelled';void notices.cancel('task:'+task.id+':result');if(activePolicy?.task===task&&currentAI)pet.ai.cancel(currentAI).catch(()=>{})}return result}
   let reviewBusy = false
   async function reviewDraft({ id, action }) {
     if (!/^[a-f0-9]{8}$/.test(String(id))) throw Error('草稿 ID 无效。')
@@ -529,7 +531,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     const question=String(input.question||'').trim()
     if(question.length>2000)throw Error('想问的问题不能超过 2000 个字符。')
     if(!await credentials())throw Error('请先连接 B 站账号：在 B 站生活面板连接后，再回到聊天发送视频链接。')
-    if(typeof pet.ai?.start!=='function'||typeof pet.ai?.deliver!=='function')throw Error('当前宿主不支持观看后回复到聊天，请更新测试宿主。')
+    if(typeof pet.ai?.start!=='function'||typeof pet.pet?.notify!=='function')throw Error('当前宿主不支持观看后回复到聊天，请更新测试宿主。')
     const localGeneration=generation;await checkGeneration(localGeneration);signal?.throwIfAborted()
     const request=question||'请概括这个视频的内容，再聊聊你的看法。',key=JSON.stringify([target,request])
     const previous=watchRequests.get(key),existing=previous?.generation===localGeneration&&state.tasks.find(task=>task.id===previous.taskId&&!TERMINAL.has(task.status))
@@ -550,6 +552,7 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     const task=state.tasks.find(x=>x.id===input.id);if(!task)return false
     const localGeneration=generation,wasActive=!TERMINAL.has(task.status)
     const running=task.status==='running'
+    if(wasActive)await notices.cancel('task:'+task.id+':result')
     if(task.jobId)cancelJob(task.jobId)
     if(task.status==='queued')task.status='cancelled'
     if(running&&activePolicy?.task===task){task.status='cancelled';for(const [id]of activePolicy.jobs)engine.cancel(id);const aiId=currentAI||task.aiTaskId;if(aiId)await pet.ai.cancel(aiId).catch(()=>{})}
@@ -668,6 +671,6 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
   await persist()
   return {api,registerTools,getState,tick,enqueue,backgroundPrompt,
     async start(){ if(timer)return;timer=await pet.scheduler.every(20000,()=>tick().catch(()=>log('后台轮询失败，将按间隔重试。'))); },
-    async dispose(){ if(stopped)return;stopped=true;aborter.abort();generation++;auth.dispose();engine.dispose();if(timer){const id=timer;timer=null;try{await pet.scheduler.cancel(id)}catch{}}if(currentAI)try{await pet.ai.cancel(currentAI)}catch{} },
+    async dispose(){ if(stopped)return;stopped=true;aborter.abort();generation++;auth.dispose();engine.dispose();await notices.cancelPending();if(timer){const id=timer;timer=null;try{await pet.scheduler.cancel(id)}catch{}}if(currentAI)try{await pet.ai.cancel(currentAI)}catch{} },
   }
 }

@@ -77,17 +77,20 @@ try {
   const values = new Map(), secrets = new Map([['bili.credentials.native', JSON.stringify({ mid: '111', sessdata: 'synthetic-native-session', bili_jct: 'a'.repeat(32) })]])
   const prompts = [], deliveries = [], registered = new Map()
   const reply = '合成视频中的彩色图案已通过实际抽帧读取。这里没有音频转写。'
+  const scope={scopeId:'petctx-'+'a'.repeat(64),revision:'native'}
   const pet = {
+    profile:{getScope:async()=>({...scope})},
+    pet:{notify:async input=>{if(input.cancel)return false;deliveries.push(input);return true}},
     storage: { get: async (key, fallback) => values.has(key) ? structuredClone(values.get(key)) : fallback, set: async (key, value) => values.set(key, structuredClone(value)) },
     secrets: { get: async key => secrets.get(key), set: async (key, value) => secrets.set(key, value), delete: async key => secrets.delete(key) },
     tools: { register: item => registered.set(item.name, item) },
-    ai: { start: async (prompt, options) => { prompts.push({ prompt, options }); return { id: 'native-model-fixture' } }, get: async () => ({ status: 'completed', text: reply }), deliver: async id => { deliveries.push(id); return true }, cancel: async () => true },
+    ai: { start: async (prompt, options) => { prompts.push({ prompt, options }); return { id: 'native-model-fixture' } }, get: async () => ({ status: 'completed', text: reply }), cancel: async () => true },
     scheduler: { every: async () => 'fixture-timer', cancel: async () => true },
   }
   const { createEngine } = await import(pathToFileURL(path.join(release, 'src/engine.mjs')).href)
   const { createController } = await import(pathToFileURL(path.join(release, 'src/controller.mjs')).href)
   engine = await createEngine({ pet, dataDir, scopeKey: 'native', secretKey: 'bili.credentials.native' })
-  controller = await createController({ pet, engine, scopeKey: 'native' })
+  controller = await createController({ pet, engine, scopeKey: 'native',scopeId:scope.scopeId,scopeRevision:scope.revision })
   controller.registerTools()
   const accepted = await registered.get('bili_watch_video').handler({ target: 'https://www.bilibili.com/video/BV1234567890/', question: '画面是什么？' }, { source: 'chat' })
   const request = JSON.parse(accepted.text)
@@ -107,8 +110,8 @@ try {
   check(images.join('').length <= 500 * 1024, 'image material remains within the model payload budget')
   assert.deepEqual(prompts[0].options.tools, [])
   check(prompts[0].prompt.includes('画面是什么？') && prompts[0].prompt.includes('Native release video fixture'), 'the original question and actual media text reach the AI contract')
-  assert.deepEqual(deliveries, ['native-model-fixture'])
-  check(task.delivery === 'chat', 'the final task is delivered to the chat contract exactly once')
+  assert.deepEqual(deliveries, [{id:'task:'+request.taskId+':result',text:reply,scope}])
+  check(task.delivery === 'shared', 'the final task is delivered through the generic message contract exactly once')
   for (const file of ['.dsh/whale-diary.md', '.dsh/whale-diary-private.md']) assert.ok(String(await engine.readState(file)).includes(reply))
   check(true, 'both pet journals persist the completed reply')
   check(fs.readdirSync(path.join(engine.dataDir, '.dsh/shots/video')).some(name => name.endsWith('.mp4')), 'a cache path containing spaces and non-ASCII text works on this OS')
