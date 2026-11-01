@@ -135,6 +135,13 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
     }
     }
     let dispatched = false
+    function releaseDispatch(s) {
+      if (s.active?.token !== requestToken) return
+      // Reservation precedes disk I/O and transport scheduling. Keep the next
+      // request at least one gap after completion, including failed attempts.
+      if (dispatched) s.lastDispatch = Math.max(Number(s.lastDispatch ?? 0), now())
+      delete s.active
+    }
     try {
       await sleep(Math.max(0, reservation.slot-now()))
       options.signal?.throwIfAborted()
@@ -169,7 +176,7 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
       const retry = response.headers?.get('retry-after')
       const retryMs = retry ? (/^\d+(\.\d+)?$/.test(retry) ? Number(retry)*1000 : Math.max(0, Date.parse(retry)-now())) : 0
       await locked(s => {
-        if (s.active?.token===requestToken) delete s.active
+        releaseDispatch(s)
         if (risk) {
           s.streak = Math.min(8, Number(s.streak ?? 0)+1)
           s.until = Math.max(Number(s.until??0),now()+Math.max(Number.isFinite(retryMs)?retryMs:0,Math.min(1800000,300000*2**(s.streak-1))))
@@ -186,7 +193,7 @@ export function createTrafficGuard({ directory, transport = (...a) => globalThis
       })
       return response
     } catch (e) {
-      await locked(s => { if(s.active?.token===requestToken)delete s.active; if (id) { if (!dispatched) delete s.operations[id]; else if (s.operations[id]) s.operations[id].status='unknown' } })
+      await locked(s => { releaseDispatch(s); if (id) { if (!dispatched) delete s.operations[id]; else if (s.operations[id]) s.operations[id].status='unknown' } })
       if (dispatched && writing) throw new TrafficError(`发送结果不确定，已禁止自动重发。请回读核查；操作 ID：${id}`)
       throw e
     }

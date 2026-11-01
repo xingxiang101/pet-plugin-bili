@@ -20,9 +20,9 @@ const manifest=JSON.parse(readEntryData(zipBytes,manifestEntries[0]).toString('u
 assert.equal(manifest.id,'bili');assert.ok(Array.isArray(manifest.permissions));assert.ok(Array.isArray(manifest.services));assert.ok(Array.isArray(manifest.platforms));
 const permissions=[...new Set([...manifest.permissions,...manifest.services.map(name=>'service:'+name)])];
 const packagePath='/releases/bili-'+encodeURIComponent(manifest.version)+'.zip';
-const WATCH='BV1234567890',BARE='BV4234567890',CANCEL_MEDIA='BV2234567890',CANCEL_AI='BV3234567890';
+const WATCH='BV1234567890',BARE='BV4234567890',CANCEL_MEDIA='BV2234567890',CANCEL_AI='BV3234567890',FAIL_WATCH='BV5234567890';
 const NIGHT_REPLY='定时浏览测试：生态关系值得继续观察。https://www.bilibili.com/video/'+WATCH+'/ SCHEDULED_SHARE_END';
-let nightRequests=0;
+let nightRequests=0,mentionEvent=null,mentionPolls=0,commentDraftRequested=false;
 const QUESTION='WATCH_MAIN：画面是什么样的？请明确区分抽帧观察与声音。';
 const REPLY='我看到了视频抽帧中的彩色测试图。这里只能确认画面采样，没有音轨或字幕依据。\n'+('这次观察来自实际下载的视频截图，彩色方格与变化的图案清晰可见。'.repeat(35))+'\nWATCH_REPLY_COMPLETE_END';
 const CHAT_MAIN='帮我看看 https://www.bilibili.com/video/'+WATCH+'/ 。'+QUESTION;
@@ -62,6 +62,14 @@ try{
     if(url.pathname==='/v1/chat/completions'){
       const body=JSON.parse(raw),prompt=JSON.stringify(body.messages),images=body.messages.flatMap(m=>Array.isArray(m.content)?m.content:[]).filter(part=>part.type==='image_url').map(part=>part.image_url.url);
       const toolNames=(body.tools||[]).map(tool=>tool.function?.name);
+      if(prompt.includes('这是新评论/@事件')){
+        if(commentDraftRequested)return finishModel(res,'已整理待审草稿，尚未发送。');
+        commentDraftRequested=true;const name=toolNames.find(name=>name.endsWith('bili_command'));
+        const args=['reply-draft','add','--oid','12','--bvid',WATCH,'--root','901','--parent','901','--who','测试访客','--message','谢谢你的分享。待审核夹具正文'];
+        res.writeHead(200,{'content-type':'text/event-stream'});
+        res.write('data: '+JSON.stringify({choices:[{index:0,delta:{role:'assistant',tool_calls:[{index:0,id:'draft-fixture',type:'function',function:{name,arguments:JSON.stringify({args})}}]},finish_reason:null}]})+'\n\n');
+        res.write('data: '+JSON.stringify({choices:[{index:0,delta:{},finish_reason:'tool_calls'}]})+'\n\n');return res.end('data: [DONE]\n\n');
+      }
       if(prompt.includes('按作息自主浏览')){nightRequests++;return finishModel(res,NIGHT_REPLY);}
       if(!images.length){
         const lastUser=body.messages.findLastIndex(message=>message.role==='user'),turn=body.messages.slice(lastUser+1),text=JSON.stringify(body.messages[lastUser]?.content||'');
@@ -71,7 +79,7 @@ try{
         if(result){const value=parseTool(result.content);if(value?.taskId){currentTaskId=value.taskId;chatTasks.set(text,value);}return finishModel(res,/^"取消/.test(text)?'已经取消这次观看。':'我去看看，完成后会回来告诉你。');}
         const cancel=/^"取消/.test(text),watchTool=toolNames.find(name=>name.endsWith('bili_watch_video')),cancelTool=toolNames.find(name=>name.endsWith('bili_watch_task'));
         if((cancel&&!cancelTool)||(!cancel&&!watchTool)){missingWatchTool=true;return finishModel(res,'当前聊天没有专用的视频观看工具入口。CHAT_WATCH_TOOL_MISSING');}
-        const target=text.includes(CANCEL_MEDIA)?CANCEL_MEDIA:text.includes(CANCEL_AI)?CANCEL_AI:text.includes(BARE)?BARE:WATCH;
+        const target=text.includes(FAIL_WATCH)?FAIL_WATCH:text.includes(CANCEL_MEDIA)?CANCEL_MEDIA:text.includes(CANCEL_AI)?CANCEL_AI:text.includes(BARE)?BARE:WATCH;
         const args=cancel?{id:currentTaskId,cancel:true}:{target,question:text.includes(QUESTION)?QUESTION:text.includes('WATCH_CANCEL_AI')?'WATCH_CANCEL_AI：取消模型分析阶段':text.includes('WATCH_CANCEL_MEDIA')?'WATCH_CANCEL_MEDIA：取消下载阶段':''};
         res.writeHead(200,{'content-type':'text/event-stream'});
         res.write('data: '+JSON.stringify({choices:[{index:0,delta:{role:'assistant',tool_calls:[{index:0,id:crypto.randomUUID(),type:'function',function:{name:cancel?cancelTool:watchTool,arguments:JSON.stringify(args)}}]},finish_reason:null}]})+'\n\n');
@@ -93,6 +101,9 @@ try{
       biliRequests.push({path:url.pathname,method:req.method,bvid:url.searchParams.get('bvid')});
       if(req.method!=='GET'){res.statusCode=405;return res.end(JSON.stringify({code:-400,message:'test forbids Bili writes'}));}
       if(url.pathname.endsWith('/nav'))return res.end(JSON.stringify({code:0,data:{isLogin:true,mid:111,uname:'本地测试账号',wbi_img:{img_url:'https://i.example/7cd084941338484aae1ad9425b84077c.png',sub_url:'https://i.example/4932caff0ff746eab6f01bf08b70ac45.png'}}}));
+      if(url.pathname.includes('/msgfeed/')){mentionPolls++;return res.end(JSON.stringify({code:0,data:{items:url.pathname.endsWith('/at')&&mentionEvent?[mentionEvent]:[]}}));}
+      if(url.pathname.endsWith('/reply/reply'))return res.end(JSON.stringify({code:0,data:{root:{rpid:901,mid:777,ctime:Math.floor(Date.now()/1000),content:{message:'@测试账号 看看这个视频'}},replies:[]}}));
+      if(url.pathname.endsWith('/view')&&url.searchParams.get('bvid')===FAIL_WATCH)return res.end(JSON.stringify({code:-404,message:'fixture unavailable video'}));
       if(url.pathname.endsWith('/view'))return res.end(JSON.stringify({code:0,data:{aid:12,cid:34,title:'本地四秒彩色测试图',duration:4,owner:{name:'本地素材夹具'}}}));
       if(url.pathname.endsWith('/playurl'))return res.end(JSON.stringify({code:0,data:{quality:64,durl:[{url:'https://upos-sz-mirrorcos.bilivideo.com/media/'+url.searchParams.get('bvid')+'.mp4'}]}}));
       res.statusCode=404;return res.end(JSON.stringify({code:-404,message:'unexpected test read'}));
@@ -135,7 +146,14 @@ try{
   const sendChat=async text=>{await H.cdp(chat,'Emulation.setFocusEmulationEnabled',{enabled:true});await H.evalIn(chat,'document.querySelector(".cp-input input").focus();document.querySelector(".cp-input input").select()');await H.cdp(chat,'Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});await H.cdp(chat,'Input.insertText',{text});await activateButton(chat,'.cp-input input',{capture:false});submittedMessages.push(text);};
   const startWatch=async(targetValue,question)=>{const text=targetValue===WATCH?CHAT_MAIN:targetValue===BARE?BARE_LINK:'帮我看看 https://www.bilibili.com/video/'+targetValue+'/ 。'+question;await sendChat(text);return wait(()=>chatTasks.get(JSON.stringify(text)),'watch task returned through the actual chat tool result');};
   const verifyChat=async label=>{
-    await wait(()=>H.evalIn(chat,`[...document.querySelectorAll('.cp-bubble-pet')].filter(node=>node.textContent===${JSON.stringify(REPLY)}).length===1`),label+' chat DOM');
+    await wait(async()=>{
+      if(await H.evalIn(chat,`[...document.querySelectorAll('.cp-bubble-pet')].filter(node=>node.textContent===${JSON.stringify(REPLY)}).length===1`))return true;
+      // Extra status records can push the original watch into an older page.
+      // Exercise the normal scroll-to-load path before checking its full DOM.
+      const scroll=await H.evalIn(chat,`(()=>{if(!document.querySelector('.cp-loadmore'))return null;const r=document.querySelector('.cp-scroll').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+      if(scroll)await H.cdp(chat,'Input.dispatchMouseEvent',{type:'mouseWheel',...scroll,deltaY:-10000,deltaX:0});
+      return false;
+    },label+' chat DOM');
     const history=await H.evalIn(chat,'chatAPI.getChatHistory({page:0,perPage:100})');
     check(history.messages.filter(item=>item.role==='pet'&&item.text===REPLY).length===1,label+' keeps the complete assistant reply exactly once');
     check(!history.messages.some(item=>item.role==='user'&&(item.text===QUESTION||item.text===REPLY||item.text===BARE_REPLY)),label+' does not fabricate an owner message');
@@ -196,7 +214,7 @@ try{
   await activateButton(panel,'[data-tab=tasks]',{capture:false});
   await wait(()=>H.evalIn(panel,`document.querySelector('#watch-result').textContent===${JSON.stringify(REPLY)}`),'complete fallback result after reopening');
   const completed=await task(watched.taskId);
-  check(completed.status==='completed'&&completed.delivery==='chat'&&completed.journal==='saved','chat entry completes watching, journaling and final chat delivery without a panel submission');
+  check(completed.status==='completed'&&completed.delivery==='shared'&&completed.journal==='saved','chat entry completes watching, journaling and final chat delivery without a panel submission');
   check(REPLY.length>700&&await H.evalIn(panel,"document.querySelector('#watch-result').textContent.endsWith('WATCH_REPLY_COMPLETE_END')"),'panel reopening restores the complete result beyond state summary truncation');
   check(await H.evalIn(panel,"pet.services.invoke('bili-control','diary',[{}]).then(value=>value.text.includes('WATCH_REPLY_COMPLETE_END'))"),'the public diary contains the actual final observation');
   check(await H.evalIn(panel,"pet.services.invoke('bili-control','diary',[{private:true}]).then(value=>value.text.includes('WATCH_REPLY_COMPLETE_END'))"),'the private diary contains the same completed experience');
@@ -206,7 +224,7 @@ try{
   check(cacheFiles.some(file=>path.basename(file).startsWith(WATCH)&&file.endsWith('.mp4')&&crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')===crypto.createHash('sha256').update(sourceVideo).digest('hex')),'actual loopback video bytes were downloaded into the scoped engine cache');
   const cachedImages=cacheFiles.filter(file=>file.endsWith('.jpg')).map(file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
   check(modelRequests[0].images.some(image=>cachedImages.includes(image.sha256)),'the model receives a real FFmpeg output image from the plugin cache');
-  await H.evalIn(chat,'setTimeout(()=>chatAPI.close(),0);true');check(await H.waitTargetGone(CDP,'/chat.html'),'chat window closes');await openChat();await verifyChat('reopened-watch');
+  await activateClosingButton(CDP,chat,'.cp-close');check(await H.waitTargetGone(CDP,'/chat.html'),'chat window closes');await openChat();await verifyChat('reopened-watch');
   await activateClosingButton(CDP,panel,'#close-panel');
   const bareTask=await startWatch(BARE,'');await wait(()=>pendingMain,'bare link starts image analysis without extra instructions');pendingMain();pendingMain=null;
   await wait(()=>H.evalIn(chat,`[...document.querySelectorAll('.cp-bubble-pet')].filter(node=>node.textContent===${JSON.stringify(BARE_REPLY)}).length===1`),'bare video link receives one final chat reply');
@@ -219,6 +237,7 @@ try{
   const aiTask=await startWatch(CANCEL_AI,'WATCH_CANCEL_AI：取消模型分析阶段');
   await wait(()=>modelRequests.some(request=>request.question==='cancel-ai'),'held model analysis');
   await sendChat('取消这次视频观看');await wait(()=>aiCancelled,'chat cancellation closes the analysis connection');
+  check(!child.log.includes('插件工具执行超时'),'chat cancellation returns without blocking on its own notification');
   check(modelRequests.length===3&&modelRequests.every(request=>request.tools.length===0),'two successful watches and one cancelled analysis each use at most one tool-free analysis call');
   panel=await open(app.settings);
   check((await task(mediaTask.taskId)).status==='cancelled'&&(await task(aiTask.taskId)).status==='cancelled','both chat cancellation requests stop only their target task');
@@ -280,11 +299,41 @@ try{
   const notices=JSON.parse(fs.readFileSync(path.join(profile,'activity-hub.json'),'utf8')).records.filter(r=>r.chatMessageId===scheduledMessage.id);
   check(notices.length===1&&notices[0].readAt===null,'Bili scheduled result has exactly one unread hub reference');
   report.scheduled={task:scheduled,message:scheduledMessage,notice:notices[0],modelFixture:true};
+  // Real chat input causes a failing media job; the fixed status is delivered
+  // through the same utilityProcess and SDK without another analysis call.
+  const failedWatch=await startWatch(FAIL_WATCH,'STATUS_FAILURE');
+  await wait(async()=> (await task(failedWatch.taskId)).status==='failed','failed watch state');
+  await activateClosingButton(CDP,chat,'.cp-close');await H.waitTargetGone(CDP,'/chat.html');
+  const statusRows=()=>JSON.parse(fs.readFileSync(path.join(profile,'activity-hub.json'),'utf8')).records.filter(r=>r.chatMessageId);
+  await wait(()=>statusRows().some(row=>row.summary.includes('这次视频观看未完成')),'failed watch notice');
+  check(modelRequests.length===3,'failure status needs no extra model call');
+  const failureNotice=statusRows().find(row=>row.summary.includes('这次视频观看未完成'));
+  await H.evalIn(panel,"pet.services.invoke('bili-control','saveSettings',[{enabled:true,night:{windows:[]},listen:{comment:true,allDay:true,dm:false,live:false}}])");
+  const waitStatus=async(check,label)=>{for(let i=0;i<130;i++){if(await check())return;await H.sleep(1000)}throw Error('Timeout: '+label)};
+  await waitStatus(async()=>!!(await state()).listeners.comment?.since,'initial inbox checkpoint');
+  mentionEvent={id:1234,at_time:Math.floor(Date.now()/1000)+1,user:{mid:777,nickname:'测试访客'},item:{business_id:1,subject_id:12,root_id:0,source_id:901,uri:'https://www.bilibili.com/video/'+WATCH+'/'}};
+  await waitStatus(()=>statusRows().some(row=>row.summary.includes('回复草稿等待你审核')),'live listener draft notice');
+  const draftNotice=statusRows().find(row=>row.summary.includes('回复草稿等待你审核'));
+  check(commentDraftRequested,'production listener drives a real AI tool and local draft creation');
+  check((await H.evalIn(panel,"pet.services.invoke('bili-control','drafts',[{}])")).items.length===1,'draft exists in actual plugin queue');
+  const overlay=await H.findTarget(CDP,'/pet-overlay.html');
+  await wait(()=>H.evalIn(overlay,`document.getElementById('bubble')?.textContent===${JSON.stringify(draftNotice.summary)}`),'draft status bubble');
+  await H.captureScreenshot(overlay,path.join(artifact,'status-draft-bubble.png'));
+  await H.evalIn(app.pet,'window.petAPI.openHub()');const hub=await H.findReadyTarget(CDP,'/hub.html','hub');
+  await wait(()=>H.evalIn(hub,`!!document.querySelector('[data-activity-id="${draftNotice.id}"] .activity-main')`),'draft status in hub');
+  await H.captureScreenshot(hub,path.join(artifact,'status-hub.png'));
+  await activateClosingButton(CDP,hub,`[data-activity-id="${draftNotice.id}"] .activity-main`);chat=await H.findReadyTarget(CDP,'/chat.html','chatAPI');
+  await wait(()=>H.evalIn(chat,`document.body?.innerText.includes(${JSON.stringify(draftNotice.summary)})`),'draft notice opens its chat record');
+  await H.evalIn(panel,"pet.services.invoke('bili-control','saveSettings',[{enabled:false}])");
+  check(statusRows().filter(row=>row.summary===draftNotice.summary).length===1,'draft notification is unique');
+  check(!draftNotice.summary.includes('待审核夹具正文'),'notification excludes private draft text');
+  report.statusNotices={failure:failureNotice,draft:draftNotice,fixture:true};
   await H.stopOwned(child);fs.writeFileSync(path.join(artifact,'electron-first.log'),child.log);child=null;
   app=await boot();panel=await open(app.settings);
   check(await H.evalIn(panel,"pet.services.invoke('bili-control','settings',[{}]).then(value=>value.owner.mid==='123456789')"),'settings survive a fresh Electron process');
   await openChat();await verifyChat('restarted-watch');
   check(nightRequests===1,'restart never replays scheduled work');
+  check(statusRows().filter(row=>row.id===failureNotice.id||row.id===draftNotice.id).length===2,'failure and draft notices persist after restart without duplication');
   check((await H.evalIn(chat,'chatAPI.getChatHistory({page:0,perPage:100})')).messages.filter(m=>m.text===NIGHT_REPLY).length===1,'scheduled reply persists exactly once after restart');
   check(modelRequests.length===3,'a fresh Electron process reads the saved reply without replaying media or AI');
   const removed=await H.evalIn(app.settings,"settings.pluginsRemove('bili')");
