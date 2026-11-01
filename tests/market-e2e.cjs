@@ -45,7 +45,7 @@ async function shot(page,name){await H.captureScreenshot(page,path.join(artifact
   await H.evalIn(login,"document.querySelector('#sms').focus()");await H.cdp(login,'Input.insertText',{text:'123456'});
   await activateButton(login,'.primary',{capture:false});check(await H.waitTargetGone(port,'trial-entry.html'),'fixture login uses real input');
  }
- const pet=await H.findReadyTarget(port,'/index.html','petAPI');await H.evalIn(pet,'petAPI.openSettings("plugins")');
+ const pet=await H.findTarget(port,'/index.html');await wait(()=>H.evalIn(pet,'!!window.petAPI'),'pet API');await H.evalIn(pet,'petAPI.openSettings("plugins")');
  settings=await H.findReadyTarget(port,'settings.html','settings');
  const index=await H.evalIn(settings,'settings.pluginsRegistryList({refresh:true})'),entry=index.plugins?.find(p=>p.id==='bili');
  assert(entry&&index.fetched,'registry returned Bili');
