@@ -102,6 +102,23 @@ test('independent Node processes share actual request spacing',async t=>{
  assert.equal(Object.values(s.guard.status().accounts)[0].readDay,4)
 })
 
+test('delayed transport dispatch cannot shorten the next request gap',async t=>{
+ for(const fail of [false,true]){
+  const s=setup(t,{minGapMs:100}),starts=[]
+  const guard=createTrafficGuard({...s.options,transport:async()=>{
+   // Model scheduling/transport work after the persisted dispatch reservation.
+   if(!starts.length)s.advance(60)
+   starts.push(s.time())
+   if(fail&&starts.length===1)throw Error('delayed transport failure')
+   return ok()
+  }})
+  const first=guard.fetch('https://api.bilibili.com/x/one')
+  if(fail)await assert.rejects(first,/delayed transport failure/);else await first
+  await guard.fetch('https://api.bilibili.com/x/two')
+  assert.ok(starts[1]-starts[0]>=100,JSON.stringify({fail,starts}))
+ }
+})
+
 test('unauthenticated nav does not block public reads; another account stays independent',async t=>{
  const s=setup(t)
  const guard=createTrafficGuard({...s.options,transport:async()=>new Response('{"code":-101}',{headers:{'content-type':'application/json'}})})

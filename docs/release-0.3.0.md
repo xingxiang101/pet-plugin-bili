@@ -18,3 +18,9 @@
 ## 验证记录
 
 准备中。前一源码候选验证见 [状态通知](status-notifications.md)；旧候选的摘要与绿灯不代表 0.3.0 安装包已验证。真实 B 站发帖、评论、私信和真实模型质量不在夹具测试范围。
+
+## CI timing regression
+
+The first candidate run 41276281673 built both native platforms. Windows checks passed; macOS exposed the existing cross-process spacing regression (85 ms between requests with a 100 ms setting). A deterministic delayed-transport test reproduced a 40 ms gap. Release now advances the shared spacing floor at completion, including failures, so reservation/disk/scheduling delay cannot compress the next request gap. The original process-spacing assertion remains unchanged. All 268 unit tests, including 16 traffic checks, pass locally.
+
+The reusable market acceptance entry is npm run test:market (exact ZIP, local registry); npm run test:market:official reads the default official index and downloads the registered Release. Both exercise the real permission UI without pre-grants, and use an isolated account fixture without Bilibili login.
