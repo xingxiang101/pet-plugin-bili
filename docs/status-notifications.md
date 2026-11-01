@@ -12,4 +12,6 @@
 
 手动观看和定时浏览成功结果、失败、待审及异常统一走 pet.pet.notify。完整结果使用 task:<插件任务 ID>:result；待重试正文保存在相应 B 站账号的 outbox，不重复执行 AI 或 B 站操作。取消排队消息调用同接口的 cancel:true，已落库消息不撤回。旧 AI API 不再是能力检查或回退路径。
 
-迁移验证：npm test 267 项、精确候选 ZIP 的 macOS arm64 原生测试 12 项、隐藏真实 Electron 81 项通过。ZIP SHA256 `9102cbf570d23145eacae404812c15fb4a4b39b345ff7caa42a20b5889c56415`，仍为未发布候选。真实 B 站发送与 Windows 原生执行不在本机验证范围。
+迁移验证：npm test 267 项、精确候选 ZIP 的 macOS arm64 原生测试 12 项、隐藏真实 Electron 81 项通过。ZIP SHA256 `be3da07877a767f385bd5a9d018cfa00ed9ee92658ce7037950c9b709098b1ae`，仍为未发布候选。真实 B 站发送与 Windows 原生执行不在本机验证范围。
+
+最终取消时序复核：先标记任务取消，再等待消息撤销完成，避免取消同时误报交付失败。76 项 controller 回归、最终候选的 12 项 macOS 原生测试及 81 项真实 Electron 检查通过。

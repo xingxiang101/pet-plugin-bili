@@ -552,11 +552,13 @@ export async function createController({ pet, engine, scopeKey = 'default', scop
     const task=state.tasks.find(x=>x.id===input.id);if(!task)return false
     const localGeneration=generation,wasActive=!TERMINAL.has(task.status)
     const running=task.status==='running'
-    if(wasActive)await notices.cancel('task:'+task.id+':result')
+    const cancelling=wasActive?notices.cancel('task:'+task.id+':result'):Promise.resolve(false)
+    if(wasActive)task.status='cancelled'
     if(task.jobId)cancelJob(task.jobId)
     if(task.status==='queued')task.status='cancelled'
     if(running&&activePolicy?.task===task){task.status='cancelled';for(const [id]of activePolicy.jobs)engine.cancel(id);const aiId=currentAI||task.aiTaskId;if(aiId)await pet.ai.cancel(aiId).catch(()=>{})}
     else if(running&&!task.jobId)await pause()
+    await cancelling
     await persist()
     // A chat tool cannot wait for a notification queued behind that same chat.
     if(wasActive)void announce('task:'+task.id+':cancelled','B 站生活：已停止这次'+taskLabel(task)+'。已经发出的内容不会撤回，可在插件面板核查。',localGeneration).then(status=>{task.notification=status}).catch(()=>{})

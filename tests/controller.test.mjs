@@ -504,14 +504,14 @@ test('delivery failure keeps full paged fallback and journal failure does not re
  assert.equal(actual,text);assert.equal(result.delivery,'unavailable');assert.equal(result.journal,'unavailable');assert.equal(f.starts,1);assert.deepEqual(f.shares.map(value=>value.text),[text]);assert.equal((await f.controller.getState()).tasks[0].text.length,700);await f.controller.dispose()
 })
 test('cancel while final delivery waits cancels the generic message before chat commits',async()=>{
- const f=await fixture();let delivering=false,release,committed=false,revoked=false
+ const f=await fixture(),otherMessages=[];let delivering=false,release,committed=false,revoked=false
  f.engine.start=async()=>{f.jobs.set('watch',{id:'watch',status:'completed',result:{text:'素材',images:['data:image/png;base64,QUFB'],exitCode:0}});return'watch'}
- f.pet.pet.notify=async value=>{if(value.cancel){revoked=true;release();return true}if(!value.id.endsWith(':result'))return true;delivering=true;await new Promise(resolve=>{release=resolve});if(revoked)throw Error('revoked before commit');committed=true;return true}
+ f.pet.pet.notify=async value=>{if(value.cancel){revoked=true;release();return true}if(!value.id.endsWith(':result')){otherMessages.push(value);return true}delivering=true;await new Promise(resolve=>{release=resolve});if(revoked)throw Error('revoked before commit');committed=true;return true}
  f.pet.ai.cancel=async id=>{f.calls.push(['ai.cancel',id]);return true}
  const task=await f.controller.api.watchVideo({target:'BV1234567890'},meta);await until(()=>delivering)
  await f.controller.api.cancelTask({id:task.id},meta)
  await until(async()=>(await f.controller.api.aiTask({id:task.id},meta)).status==='cancelled')
- assert.ok(f.calls.some(args=>args[0]==='ai.cancel'&&args[1]==='ai-1'));assert.equal(committed,false);assert.equal(f.starts,1);await f.controller.dispose()
+ assert.ok(f.calls.some(args=>args[0]==='ai.cancel'&&args[1]==='ai-1'));assert.equal(committed,false);assert.equal(f.starts,1);await until(()=>otherMessages.length>0);assert.ok(otherMessages.every(value=>value.id.endsWith(':cancelled')),'cancellation must not report delivery failure');await f.controller.dispose()
 })
 test('comment backlog advances only the resolved batch, including same-second ids',async()=>{
  let time=200000;const items=Array.from({length:25},(_,i)=>({kind:'reply',id:String(i+1),t:101,mid:'8',oid:'1',root:'2',parent:String(i+10),business:'1'}))
